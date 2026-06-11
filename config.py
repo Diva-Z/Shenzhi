@@ -240,6 +240,7 @@ available_setting = {
     "mimo_api_base": "https://api.xiaomimimo.com/v1",
     "web_host": "",  # Web console bind address; empty means auto
     "web_port": 9899,
+    "web_auto_open_browser": False,  # open the web console in a browser on startup (off by default; noisy with multiple instances)
     "web_password": "",  # Web console password; empty means no authentication required
     "web_session_expire_days": 30,  # Auth session expiry in days
     "web_file_serve_root": "~",  # Root dir the /api/file endpoint may serve; "/" allows the whole filesystem

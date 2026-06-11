@@ -24,6 +24,13 @@ import requests
 
 from common.log import logger
 
+# 微信 ilink 与 CDN 都是腾讯国内域名，必须直连。机器上常驻全局代理
+# （HTTP_PROXY/HTTPS_PROXY，给 Telegram 用）时，requests 默认会把这里的
+# long-poll 也送进代理隧道，代理切节点/掐长连接就报 SSL UNEXPECTED_EOF。
+# trust_env=False 让本模块所有请求无视环境代理，Telegram 等其他通道不受影响。
+_session = requests.Session()
+_session.trust_env = False
+
 DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
 CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c"
 DEFAULT_LONG_POLL_TIMEOUT = 35
@@ -74,7 +81,7 @@ class WeixinApi:
         headers = _build_headers(self.token)
         body.setdefault("base_info", {}).setdefault("channel_version", CHANNEL_VERSION)
         try:
-            resp = requests.post(url, json=body, headers=headers, timeout=timeout)
+            resp = _session.post(url, json=body, headers=headers, timeout=timeout)
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.Timeout:
@@ -212,7 +219,7 @@ class WeixinApi:
 
     def fetch_qr_code(self) -> dict:
         url = _ensure_trailing_slash(self.base_url) + f"ilink/bot/get_bot_qrcode?bot_type={BOT_TYPE}"
-        resp = requests.get(url, timeout=15)
+        resp = _session.get(url, timeout=15)
         resp.raise_for_status()
         return resp.json()
 
@@ -224,7 +231,7 @@ class WeixinApi:
             "iLink-App-ClientVersion": CLIENT_VERSION,
         }
         try:
-            resp = requests.get(url, headers=headers, timeout=timeout)
+            resp = _session.get(url, headers=headers, timeout=timeout)
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.Timeout:
@@ -328,7 +335,7 @@ def upload_media_to_cdn(api: WeixinApi, file_path: str, to_user_id: str,
             else:
                 raise RuntimeError(f"[Weixin] getUploadUrl returned neither upload_full_url nor upload_param: {resp}")
 
-            cdn_resp = requests.post(cdn_url, data=encrypted, headers={
+            cdn_resp = _session.post(cdn_url, data=encrypted, headers={
                 "Content-Type": "application/octet-stream",
                 "Content-Length": str(len(encrypted)),
             }, timeout=120)
@@ -381,7 +388,7 @@ def download_media_from_cdn(cdn_base_url: str, encrypt_query_param: str,
     """
     from urllib.parse import quote
     url = f"{cdn_base_url}/download?encrypted_query_param={quote(encrypt_query_param)}"
-    resp = requests.get(url, timeout=60)
+    resp = _session.get(url, timeout=60)
     resp.raise_for_status()
 
     # Determine key format:

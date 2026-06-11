@@ -125,6 +125,49 @@ def _apply_model_settings(cfg, b):
     return changed, None
 
 
+# 语音引擎合法值（与 voice/factory.py 的分支一致）与图像生成厂商
+# （与 skills/image-generation 的 _PROVIDER_ID_TO_LABEL 一致）。
+VOICE_ENGINES = [
+    "dashscope", "openai", "ali", "baidu", "google", "azure", "edge",
+    "xunfei", "tencent", "minimax", "elevenlabs", "pytts", "zhipu", "mimo", "linkai",
+]
+IMAGE_PROVIDERS = ["dashscope", "openai", "gemini", "doubao", "minimax", "linkai"]
+
+
+def _apply_media_settings(cfg, b):
+    """语音/图像生成设置写入实例配置。字段空 = 不修改。返回 (changed, error)。"""
+    changed = False
+    for field in ("voice_to_text", "text_to_voice"):
+        v = (b.get(field) or "").strip()
+        if v:
+            if v not in VOICE_ENGINES:
+                return False, f"未知语音引擎 {v}（可选：{', '.join(VOICE_ENGINES)}）"
+            cfg[field] = v
+            changed = True
+    tts = (b.get("tts_voice_id") or "").strip()
+    if tts:
+        cfg["tts_voice_id"] = tts
+        changed = True
+    vr = b.get("voice_reply_voice")
+    if isinstance(vr, bool):
+        cfg["voice_reply_voice"] = vr
+        changed = True
+    img_p = (b.get("image_provider") or "").strip()
+    img_m = (b.get("image_model") or "").strip()
+    if img_p and img_p not in IMAGE_PROVIDERS:
+        return False, f"未知图像生成厂商 {img_p}（可选：{', '.join(IMAGE_PROVIDERS)}）"
+    if img_p or img_m:
+        # 图像生成模型按 skill 命名空间存放，实例启动时同步为
+        # SKILL_IMAGE_GENERATION_{PROVIDER,MODEL} 环境变量供 skill 子进程读取
+        sk = cfg.setdefault("skills", {}).setdefault("image-generation", {})
+        if img_p:
+            sk["provider"] = img_p
+        if img_m:
+            sk["model"] = img_m
+        changed = True
+    return changed, None
+
+
 # Keys copied from config.json into a new persona config (shared credentials
 # and model settings). Everything else is set per persona.
 _INHERIT_KEYS = [
@@ -139,6 +182,7 @@ _INHERIT_KEYS = [
     "use_linkai", "linkai_api_key", "linkai_app_code",
     "agent", "agent_max_context_tokens", "agent_max_context_turns",
     "agent_max_steps", "enable_thinking", "self_evolution_enabled",
+    "skills",  # skill 命名空间配置（如图像生成模型），新人格继承默认值
 ]
 
 
@@ -509,6 +553,8 @@ class Overview:
             "max_running": MAX_RUNNING,
             "default_persona": _default_persona(),
             "model_providers": _providers_payload(),
+            "voice_engines": VOICE_ENGINES,
+            "image_providers": IMAGE_PROVIDERS,
         })
 
 
@@ -520,7 +566,15 @@ class PersonaDetail:
         info = _persona_info(name)
         info["agent_md"] = _read_text(os.path.join(pdir, "AGENT.md"))
         info["user_md"] = _read_text(os.path.join(pdir, "USER.md"))
-        info["model_providers"] = _providers_payload(_load_json(_config_path(name)))
+        cfg = _load_json(_config_path(name))
+        info["model_providers"] = _providers_payload(cfg)
+        info["voice_to_text"] = cfg.get("voice_to_text", "")
+        info["text_to_voice"] = cfg.get("text_to_voice", "")
+        info["tts_voice_id"] = cfg.get("tts_voice_id", "")
+        info["voice_reply_voice"] = bool(cfg.get("voice_reply_voice", False))
+        img = (cfg.get("skills") or {}).get("image-generation") or {}
+        info["image_provider"] = img.get("provider", "")
+        info["image_model"] = img.get("model", "")
         return _json_resp(info)
 
     def PUT(self, name):
@@ -542,7 +596,7 @@ class PersonaDetail:
                     "400 Bad Request",
                 )
 
-        # 模型/API 设置同样先校验（_apply_model_settings 会改 cfg，校验失败直接返回不落盘）
+        # 模型/语音/图像设置同样先校验（会改 cfg，校验失败直接返回不落盘）
         cfg_path = _config_path(name)
         cfg = _load_json(cfg_path)
         model_changed = False
@@ -550,6 +604,10 @@ class PersonaDetail:
             model_changed, err = _apply_model_settings(cfg, b)
             if err:
                 return _json_resp({"error": err}, "400 Bad Request")
+            media_changed, err = _apply_media_settings(cfg, b)
+            if err:
+                return _json_resp({"error": err}, "400 Bad Request")
+            model_changed = model_changed or media_changed
 
         if "agent_md" in b:
             _write_text(os.path.join(pdir, "AGENT.md"), b["agent_md"])
@@ -627,6 +685,9 @@ class PersonaCreate:
             b.get("followup_min") or 180, b.get("followup_max") or 240,
         )
         _, err = _apply_model_settings(cfg, b)
+        if err:
+            return _json_resp({"error": err}, "400 Bad Request")
+        _, err = _apply_media_settings(cfg, b)
         if err:
             return _json_resp({"error": err}, "400 Bad Request")
 

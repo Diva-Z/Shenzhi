@@ -102,6 +102,16 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
       <div class="f1"><label id="c-mkey-label">API Key（留空 = 用默认配置里的 key）</label><input type="text" id="c-mkey" placeholder="sk-..."></div>
       <div class="f1" id="c-mbase-box"><label>API Base（可选，留空用官方地址）</label><input type="text" id="c-mbase" placeholder="https://..."></div>
     </div>
+    <div class="row">
+      <div class="f1"><label>语音识别</label><select id="c-v2t"><option value="">继承默认配置</option></select></div>
+      <div class="f1"><label>语音合成</label><select id="c-t2v"><option value="">继承默认配置</option></select></div>
+      <div class="f1"><label>音色 ID（如 Serena）</label><input type="text" id="c-tts" placeholder="留空继承"></div>
+      <div class="f1"><label>语音回复（微信 ilink 发不了语音气泡）</label><select id="c-vrep"><option value="">继承默认配置</option><option value="on">开启</option><option value="off">关闭</option></select></div>
+    </div>
+    <div class="row">
+      <div class="f1"><label>图像生成厂商</label><select id="c-imgp"><option value="">继承默认配置</option></select></div>
+      <div class="f1"><label>图像生成模型</label><input type="text" id="c-imgm" placeholder="如 qwen-image / gemini-2.5-flash-image，留空继承"></div>
+    </div>
     <div class="tabs">
       <button id="tab-form" class="on" onclick="setTab('form')">引导表单</button>
       <button id="tab-raw" onclick="setTab('raw')">直接编辑 Markdown</button>
@@ -166,6 +176,16 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
     <div class="row" id="e-mapi-row" style="display:none">
       <div class="f1"><label id="e-mkey-label">API Key（留空 = 不修改）</label><input type="text" id="e-mkey" placeholder="不修改请留空"></div>
       <div class="f1" id="e-mbase-box"><label>API Base（留空 = 不修改）</label><input type="text" id="e-mbase" placeholder="https://..."></div>
+    </div>
+    <div class="row">
+      <div class="f1"><label>语音识别</label><select id="e-v2t"><option value="">不修改</option></select></div>
+      <div class="f1"><label>语音合成</label><select id="e-t2v"><option value="">不修改</option></select></div>
+      <div class="f1"><label id="e-tts-label">音色 ID</label><input type="text" id="e-tts" placeholder="不修改请留空"></div>
+      <div class="f1"><label>语音回复（微信 ilink 发不了语音气泡）</label><select id="e-vrep"><option value="">不修改</option><option value="on">开启</option><option value="off">关闭</option></select></div>
+    </div>
+    <div class="row">
+      <div class="f1"><label>图像生成厂商</label><select id="e-imgp"><option value="">不修改</option></select></div>
+      <div class="f1"><label id="e-imgm-label">图像生成模型</label><input type="text" id="e-imgm" placeholder="不修改请留空"></div>
     </div>
     <div class="row"><div class="f1"><label>Telegram bot token（留空 = 不修改）</label><input type="text" id="e-tg-token" placeholder="不修改请留空"></div></div>
     <div class="row"><div class="f1"><label>AGENT.md（AI 人设）</label><textarea id="e-agent" class="md" rows="16"></textarea></div></div>
@@ -257,6 +277,30 @@ function modelFields(prefix){
   };
 }
 
+function fillMediaSelects(prefix){
+  for(const [id, list] of [[`${prefix}-v2t`, state.voice_engines], [`${prefix}-t2v`, state.voice_engines], [`${prefix}-imgp`, state.image_providers]]){
+    const sel = $(id);
+    if(!sel || !list) continue;
+    const keep = sel.value;
+    sel.length = 1; // 保留首项「继承/不修改」
+    for(const v of list) sel.add(new Option(v, v));
+    sel.value = keep;
+  }
+}
+
+function mediaFields(prefix){
+  const vrep = $(`${prefix}-vrep`).value;
+  const out = {
+    voice_to_text: $(`${prefix}-v2t`).value,
+    text_to_voice: $(`${prefix}-t2v`).value,
+    tts_voice_id: $(`${prefix}-tts`).value.trim(),
+    image_provider: $(`${prefix}-imgp`).value,
+    image_model: $(`${prefix}-imgm`).value.trim(),
+  };
+  if(vrep) out.voice_reply_voice = (vrep === 'on'); // 空 = 不修改
+  return out;
+}
+
 function render(){
   $('run-count').textContent = state.running;
   $('max-count').textContent = state.max_running;
@@ -293,6 +337,7 @@ async function refresh(){
   try {
     state = await api('/api/overview'); render();
     fillProviderSelect('c'); fillProviderSelect('e');
+    fillMediaSelects('c'); fillMediaSelects('e');
   } catch(e){ toast('刷新失败：' + e.message); }
 }
 
@@ -336,6 +381,7 @@ async function submitCreate(){
     followup_min: +$('c-fmin').value||180, followup_max: +$('c-fmax').value||240,
     mode,
     ...modelFields('c'),
+    ...mediaFields('c'),
   };
   if(mode==='raw'){ body.agent_md=$('c-agent').value; body.user_md=$('c-userm').value; }
   else body.form = {
@@ -370,6 +416,17 @@ async function openEdit(id){
     $('e-mname').placeholder = d.model ? `当前 ${d.model}，留空 = 不修改` : '不修改请留空';
     $('e-mkey').value = ''; $('e-mbase').value = '';
     provChange('e');
+    // 语音/图像：下拉留在「不修改」，placeholder 显示当前值
+    $('e-v2t').value = ''; $('e-t2v').value = ''; $('e-vrep').value = '';
+    $('e-v2t').options[0].text = d.voice_to_text ? `不修改（当前 ${d.voice_to_text}）` : '不修改';
+    $('e-t2v').options[0].text = d.text_to_voice ? `不修改（当前 ${d.text_to_voice}）` : '不修改';
+    $('e-vrep').options[0].text = `不修改（当前${d.voice_reply_voice ? '开启' : '关闭'}）`;
+    $('e-tts').value = '';
+    $('e-tts').placeholder = d.tts_voice_id ? `当前 ${d.tts_voice_id}，留空 = 不修改` : '不修改请留空';
+    $('e-imgp').value = '';
+    $('e-imgp').options[0].text = d.image_provider ? `不修改（当前 ${d.image_provider}）` : '不修改（当前自动）';
+    $('e-imgm').value = '';
+    $('e-imgm').placeholder = d.image_model ? `当前 ${d.image_model}，留空 = 不修改` : '当前自动，不修改请留空';
     $('e-agent').value = d.agent_md; $('e-user').value = d.user_md;
     show('m-edit');
   } catch(e){ toast(e.message); }
@@ -381,6 +438,7 @@ async function submitEdit(restart){
     followup_min: +$('e-fmin').value||0, followup_max: +$('e-fmax').value||0,
     followup_repeat_min: +$('e-rmin').value||0, followup_repeat_max: +$('e-rmax').value||0,
     ...modelFields('e'),
+    ...mediaFields('e'),
     restart,
   };
   if(restart) toast('保存并重启中…（约 10 秒）', 15000);

@@ -1105,12 +1105,15 @@ class WebChannel(ChatChannel):
         else:
             logger.info(f"[WebChannel] 🔒 Listening on {host} only (local access). For public access, set web_host to 0.0.0.0 and configure web_password")
 
-        try:
-            import webbrowser
-            webbrowser.open(f"http://localhost:{port}")
-            logger.debug(f"[WebChannel] Opened browser at http://localhost:{port}")
-        except Exception as e:
-            logger.debug(f"[WebChannel] Could not open browser: {e}")
+        # 默认不自动弹浏览器：多实例/主控端场景下每次重启实例都弹一个
+        # 控制台页非常打扰。需要旧行为时在 config 设 web_auto_open_browser: true。
+        if conf().get("web_auto_open_browser", False):
+            try:
+                import webbrowser
+                webbrowser.open(f"http://localhost:{port}")
+                logger.debug(f"[WebChannel] Opened browser at http://localhost:{port}")
+            except Exception as e:
+                logger.debug(f"[WebChannel] Could not open browser: {e}")
 
         # 确保静态文件目录存在
         static_dir = os.path.join(os.path.dirname(__file__), 'static')
