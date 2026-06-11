@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>沈知 · 主控端</title>
+<style>
+:root{--bg:#0f1217;--card:#171c24;--card2:#1e2530;--line:#2a3342;--text:#e6ebf2;--dim:#8b97a8;--acc:#7c9cff;--ok:#3ecf8e;--bad:#5b6678;--warn:#f0b35e;--danger:#e06c75}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:"Segoe UI","Microsoft YaHei",sans-serif;min-height:100vh}
+header{display:flex;align-items:center;gap:14px;padding:18px 28px;border-bottom:1px solid var(--line)}
+header h1{font-size:20px;font-weight:600}
+header .badge{margin-left:auto;background:var(--card2);border:1px solid var(--line);border-radius:20px;padding:6px 16px;font-size:13px;color:var(--dim)}
+header .badge b{color:var(--ok)}
+.wrap{max-width:1080px;margin:0 auto;padding:26px 20px 60px}
+.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.toolbar h2{font-size:15px;color:var(--dim);font-weight:500}
+button{cursor:pointer;border:1px solid var(--line);background:var(--card2);color:var(--text);border-radius:8px;padding:7px 14px;font-size:13px;transition:.15s}
+button:hover{border-color:var(--acc);color:var(--acc)}
+button.primary{background:var(--acc);border-color:var(--acc);color:#0d1117;font-weight:600}
+button.primary:hover{opacity:.9;color:#0d1117}
+button.danger:hover{border-color:var(--danger);color:var(--danger)}
+button:disabled{opacity:.4;cursor:not-allowed}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
+.card .top{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--bad);flex-shrink:0}
+.dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.card h3{font-size:17px;font-weight:600}
+.card .id{color:var(--dim);font-size:12px}
+.tag{display:inline-block;background:var(--card2);border:1px solid var(--line);border-radius:5px;padding:2px 8px;font-size:11.5px;color:var(--dim);margin:2px 4px 2px 0}
+.tag.hl{color:var(--warn);border-color:var(--warn)}
+.meta{font-size:12.5px;color:var(--dim);margin:8px 0 12px;line-height:1.8}
+.btns{display:flex;flex-wrap:wrap;gap:8px}
+.btns button{padding:6px 12px;font-size:12.5px}
+/* modal */
+.mask{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10;align-items:flex-start;justify-content:center;overflow:auto;padding:40px 16px}
+.mask.show{display:flex}
+.modal{background:var(--card);border:1px solid var(--line);border-radius:14px;width:760px;max-width:100%;padding:24px}
+.modal h3{margin-bottom:16px;font-size:17px}
+.modal .row{display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+.modal label{display:block;font-size:12.5px;color:var(--dim);margin-bottom:5px}
+.modal input[type=text],.modal input[type=number],.modal textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;font-family:inherit}
+.modal textarea{resize:vertical;line-height:1.6}
+.modal textarea.md{font-family:Consolas,monospace;font-size:12.5px}
+.f1{flex:1;min-width:150px}
+.checks{display:flex;gap:18px;padding-top:4px}
+.checks label{display:flex;align-items:center;gap:6px;color:var(--text);font-size:13px;cursor:pointer}
+.tabs{display:flex;gap:6px;margin-bottom:16px}
+.tabs button.on{background:var(--acc);color:#0d1117;border-color:var(--acc);font-weight:600}
+.foot{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+.hint{font-size:12px;color:var(--dim);line-height:1.7;margin-top:4px}
+#toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:var(--card2);border:1px solid var(--acc);border-radius:10px;padding:10px 22px;font-size:13.5px;display:none;z-index:99;max-width:80vw}
+#qrbox{text-align:center}
+#qrbox img{width:260px;height:260px;border-radius:10px;background:#fff;padding:8px;margin:10px 0}
+pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:11.5px;line-height:1.55;max-height:480px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#aeb8c6}
+</style>
+</head>
+<body>
+<header>
+  <h1>沈知 · 主控端</h1>
+  <div class="badge">运行中 <b id="run-count">0</b> / <span id="max-count">3</span></div>
+</header>
+<div class="wrap">
+  <div class="toolbar">
+    <h2>人格实例（一个人格 = 独立人设 + 独立记忆 + 独立 bot 进程）</h2>
+    <button class="primary" onclick="openCreate()">＋ 新建人格</button>
+  </div>
+  <div class="grid" id="grid"></div>
+</div>
+
+<!-- 新建人格 -->
+<div class="mask" id="m-create">
+  <div class="modal">
+    <h3>新建人格</h3>
+    <div class="row">
+      <div class="f1"><label>人格 ID（小写英文，作为目录与配置名）</label><input type="text" id="c-id" placeholder="如 chenfeng"></div>
+      <div class="f1"><label>渠道（至少一个）</label>
+        <div class="checks">
+          <label><input type="checkbox" id="c-ch-weixin"> 微信</label>
+          <label><input type="checkbox" id="c-ch-telegram"> Telegram</label>
+          <label><input type="checkbox" id="c-ch-web"> Web</label>
+        </div>
+      </div>
+    </div>
+    <div class="row" id="c-tg-row" style="display:none">
+      <div class="f1"><label>Telegram bot token（@BotFather 创建，每个人格一个独立 bot）</label><input type="text" id="c-tg-token" placeholder="123456:ABC-..."></div>
+    </div>
+    <div class="row">
+      <div class="f1"><label>追问等待 · 最小（分钟）</label><input type="number" id="c-fmin" value="180"></div>
+      <div class="f1"><label>追问等待 · 最大（分钟）</label><input type="number" id="c-fmax" value="240"></div>
+    </div>
+    <div class="tabs">
+      <button id="tab-form" class="on" onclick="setTab('form')">引导表单</button>
+      <button id="tab-raw" onclick="setTab('raw')">直接编辑 Markdown</button>
+    </div>
+    <div id="pane-form">
+      <div class="row">
+        <div class="f1"><label>AI 名字</label><input type="text" id="c-bot" placeholder="如 晨风"></div>
+        <div class="f1"><label>用户名字</label><input type="text" id="c-user" placeholder="如 晚晴"></div>
+        <div class="f1"><label>关系（AI 是用户的——）</label><input type="text" id="c-rel" placeholder="如 青梅竹马 / 女朋友"></div>
+      </div>
+      <div class="row"><div class="f1"><label>背景故事（两人怎么认识、现在的生活）</label><textarea id="c-bg" rows="4"></textarea></div></div>
+      <div class="row">
+        <div class="f1"><label>AI 性格（一行一条）</label><textarea id="c-pers" rows="4" placeholder="- 外冷内热&#10;- 话少，主意正"></textarea></div>
+        <div class="f1"><label>说话风格（一行一条）</label><textarea id="c-style" rows="4" placeholder="短句，肯定句&#10;称呼他全名"></textarea></div>
+      </div>
+      <div class="row">
+        <div class="f1"><label>表情使用</label>
+          <div class="checks">
+            <label><input type="radio" name="emoji" value="none"> 几乎不用</label>
+            <label><input type="radio" name="emoji" value="few" checked> 较少</label>
+            <label><input type="radio" name="emoji" value="normal"> 适度</label>
+            <label><input type="radio" name="emoji" value="many"> 大量</label>
+          </div>
+        </div>
+      </div>
+      <div class="row"><div class="f1"><label>对话示例（可选，few-shot 对语气影响最大；格式：一行用户说，一行 AI 回，AI 多句用 [MSG] 分隔）</label><textarea id="c-few" rows="4"></textarea></div></div>
+      <div class="row"><div class="f1"><label>用户档案（工作、性格、作息等，注入给 AI 了解用户）</label><textarea id="c-uprof" rows="4"></textarea></div></div>
+      <div class="row"><div class="f1"><label>相处规则（可选）</label><textarea id="c-urule" rows="2"></textarea></div></div>
+    </div>
+    <div id="pane-raw" style="display:none">
+      <div class="row"><div class="f1"><label>AGENT.md（AI 人设全文）</label><textarea id="c-agent" class="md" rows="14"></textarea></div></div>
+      <div class="row"><div class="f1"><label>USER.md（用户设定全文）</label><textarea id="c-userm" class="md" rows="8"></textarea></div></div>
+    </div>
+    <p class="hint">创建后会生成 personas/{id}/ 人设目录与 config-{id}.json 实例配置（模型与 key 继承当前默认配置，可到该实例自己的 Web 控制台再调）。微信渠道首次启动需目标用户扫码登录。</p>
+    <div class="foot"><button onclick="hide('m-create')">取消</button><button class="primary" onclick="submitCreate()">创建</button></div>
+  </div>
+</div>
+
+<!-- 编辑人格 -->
+<div class="mask" id="m-edit">
+  <div class="modal">
+    <h3 id="e-title">编辑人格</h3>
+    <div class="row">
+      <div class="f1"><label>渠道</label>
+        <div class="checks">
+          <label><input type="checkbox" id="e-ch-weixin"> 微信</label>
+          <label><input type="checkbox" id="e-ch-telegram"> Telegram</label>
+          <label><input type="checkbox" id="e-ch-web"> Web</label>
+        </div>
+      </div>
+      <div class="f1"><label>追问最小（分钟）</label><input type="number" id="e-fmin"></div>
+      <div class="f1"><label>追问最大（分钟）</label><input type="number" id="e-fmax"></div>
+    </div>
+    <div class="row"><div class="f1"><label>Telegram bot token（留空 = 不修改）</label><input type="text" id="e-tg-token" placeholder="不修改请留空"></div></div>
+    <div class="row"><div class="f1"><label>AGENT.md（AI 人设）</label><textarea id="e-agent" class="md" rows="16"></textarea></div></div>
+    <div class="row"><div class="f1"><label>USER.md（用户设定）</label><textarea id="e-user" class="md" rows="9"></textarea></div></div>
+    <p class="hint">人设与配置改动需重启实例后生效（约 10 秒，仅影响该人格）。</p>
+    <div class="foot">
+      <button onclick="hide('m-edit')">取消</button>
+      <button onclick="submitEdit(false)">仅保存</button>
+      <button class="primary" onclick="submitEdit(true)">保存并重启</button>
+    </div>
+  </div>
+</div>
+
+<!-- 微信二维码 -->
+<div class="mask" id="m-qr">
+  <div class="modal" style="width:380px">
+    <h3>微信扫码登录</h3>
+    <div id="qrbox"><img id="qr-img" src="" alt="二维码加载中"><p class="hint">用目标用户本人的微信扫码（bot 与第一个扫码号永久绑定）。<br>二维码每 2 分钟自动换新，本窗口每 20 秒自动刷新。</p></div>
+    <div class="foot"><button onclick="stopQr()">关闭</button></div>
+  </div>
+</div>
+
+<!-- 日志 -->
+<div class="mask" id="m-log">
+  <div class="modal" style="width:880px">
+    <h3 id="log-title">日志</h3>
+    <pre class="log" id="log-body"></pre>
+    <div class="foot"><button onclick="hide('m-log')">关闭</button></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script>
+let state = {personas: []};
+let qrTimer = null, editId = null;
+
+const $ = id => document.getElementById(id);
+function show(id){ $(id).classList.add('show'); }
+function hide(id){ $(id).classList.remove('show'); }
+function toast(msg, ms=3200){ const t=$('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none', ms); }
+
+async function api(path, opt){
+  const r = await fetch(path, opt);
+  let d = {};
+  try { d = await r.json(); } catch(e){}
+  if(!r.ok && d.error) throw new Error(d.error);
+  if(!r.ok && d.message) throw new Error(d.message);
+  if(!r.ok) throw new Error('请求失败 ' + r.status);
+  return d;
+}
+
+const CH_NAME = {weixin:'微信', telegram:'Telegram', web:'Web'};
+
+function render(){
+  $('run-count').textContent = state.running;
+  $('max-count').textContent = state.max_running;
+  const g = $('grid'); g.innerHTML = '';
+  for(const p of state.personas){
+    const chans = p.channels.map(c=>`<span class="tag">${CH_NAME[c]||c}</span>`).join('');
+    const fu = p.followup_first_sec ? `${Math.round(p.followup_first_sec[0]/60)}-${Math.round(p.followup_first_sec[1]/60)} 分钟` : '默认';
+    let warn = '';
+    if(p.channels.includes('weixin') && p.weixin_logged_in === false) warn += `<span class="tag hl">微信未登录</span>`;
+    if(p.channels.includes('telegram') && !p.telegram_token_set) warn += `<span class="tag hl">缺 TG token</span>`;
+    if(!p.config_exists) warn += `<span class="tag hl">缺配置文件</span>`;
+    const consoleBtn = (p.web_console && p.running) ? `<button onclick="window.open('http://localhost:${p.web_port}','_blank')">控制台</button>` : '';
+    const qrBtn = p.weixin_qr_available ? `<button onclick="openQr('${p.id}')">微信二维码</button>` : '';
+    const runBtns = p.running
+      ? `<button class="danger" onclick="act('${p.id}','stop')">停止</button><button onclick="act('${p.id}','restart')">重启</button>`
+      : `<button class="primary" onclick="act('${p.id}','start')" ${state.running>=state.max_running?'disabled title="已达并行上限"':''}>启动</button>`;
+    g.insertAdjacentHTML('beforeend', `
+      <div class="card">
+        <div class="top"><span class="dot ${p.running?'on':''}"></span><h3>${p.title}</h3><span class="id">${p.id}${p.is_default?' · 默认实例':''}</span></div>
+        <div>${chans}${warn}</div>
+        <div class="meta">追问间隔：${fu}　${p.running?('PID '+p.pid):'未运行'}</div>
+        <div class="btns">${runBtns}<button onclick="openEdit('${p.id}')">编辑</button>${consoleBtn}${qrBtn}<button onclick="openLog('${p.id}')">日志</button></div>
+      </div>`);
+  }
+}
+
+async function refresh(){
+  try { state = await api('/api/overview'); render(); } catch(e){ toast('刷新失败：' + e.message); }
+}
+
+async function act(id, action){
+  toast({start:'启动中…',stop:'停止中…',restart:'重启中…（约 10 秒）'}[action], 12000);
+  try {
+    const d = await api(`/api/instance/${id}/${action}`, {method:'POST'});
+    toast(d.ok ? {start:'已启动',stop:'已停止',restart:'已重启'}[action] : d.message);
+  } catch(e){ toast(e.message, 6000); }
+  refresh();
+}
+
+/* 新建 */
+function openCreate(){ show('m-create'); }
+function setTab(t){
+  $('tab-form').classList.toggle('on', t==='form');
+  $('tab-raw').classList.toggle('on', t==='raw');
+  $('pane-form').style.display = t==='form'?'':'none';
+  $('pane-raw').style.display = t==='raw'?'':'none';
+}
+document.addEventListener('change', e=>{
+  if(e.target.id==='c-ch-telegram') $('c-tg-row').style.display = e.target.checked?'':'none';
+});
+function chans(prefix){
+  return ['weixin','telegram','web'].filter(c=>$(`${prefix}-ch-${c}`).checked);
+}
+async function submitCreate(){
+  const mode = $('pane-raw').style.display==='' ? 'raw' : 'form';
+  const body = {
+    id: $('c-id').value.trim(), channels: chans('c'),
+    telegram_token: $('c-tg-token').value.trim(),
+    followup_min: +$('c-fmin').value||180, followup_max: +$('c-fmax').value||240,
+    mode,
+  };
+  if(mode==='raw'){ body.agent_md=$('c-agent').value; body.user_md=$('c-userm').value; }
+  else body.form = {
+    bot_name:$('c-bot').value.trim(), user_name:$('c-user').value.trim(),
+    relationship:$('c-rel').value.trim(), background:$('c-bg').value,
+    personality:$('c-pers').value, style:$('c-style').value,
+    emoji_level:document.querySelector('input[name=emoji]:checked').value,
+    few_shot:$('c-few').value, user_profile:$('c-uprof').value, user_rules:$('c-urule').value,
+  };
+  try {
+    const d = await api('/api/persona', {method:'POST', body: JSON.stringify(body)});
+    hide('m-create'); toast(`人格 ${d.id} 已创建（${d.config_file}），可点「启动」上线`, 6000);
+    refresh();
+  } catch(e){ toast(e.message, 6000); }
+}
+
+/* 编辑 */
+async function openEdit(id){
+  try {
+    const d = await api(`/api/persona/${id}`);
+    editId = id;
+    $('e-title').textContent = `编辑人格：${d.title}（${id}）`;
+    ['weixin','telegram','web'].forEach(c=>$(`e-ch-${c}`).checked = d.channels.includes(c));
+    $('e-fmin').value = d.followup_first_sec ? Math.round(d.followup_first_sec[0]/60) : '';
+    $('e-fmax').value = d.followup_first_sec ? Math.round(d.followup_first_sec[1]/60) : '';
+    $('e-tg-token').value = '';
+    $('e-agent').value = d.agent_md; $('e-user').value = d.user_md;
+    show('m-edit');
+  } catch(e){ toast(e.message); }
+}
+async function submitEdit(restart){
+  const body = {
+    agent_md: $('e-agent').value, user_md: $('e-user').value,
+    channels: chans('e'), telegram_token: $('e-tg-token').value.trim(),
+    followup_min: +$('e-fmin').value||0, followup_max: +$('e-fmax').value||0,
+    restart,
+  };
+  if(restart) toast('保存并重启中…（约 10 秒）', 15000);
+  try {
+    const d = await api(`/api/persona/${editId}`, {method:'PUT', body: JSON.stringify(body)});
+    hide('m-edit'); toast(d.hint, 5000); refresh();
+  } catch(e){ toast(e.message, 6000); }
+}
+
+/* 二维码 */
+function openQr(id){
+  show('m-qr');
+  const load = ()=>{ $('qr-img').src = `/api/qr/${id}?t=${Date.now()}`; };
+  load();
+  qrTimer = setInterval(load, 20000);
+}
+function stopQr(){ hide('m-qr'); clearInterval(qrTimer); }
+
+/* 日志 */
+async function openLog(id){
+  try {
+    const d = await api(`/api/log/${id}`);
+    $('log-title').textContent = `日志：${id}（最近 80 行）`;
+    $('log-body').textContent = d.lines.join('');
+    show('m-log');
+    $('log-body').scrollTop = $('log-body').scrollHeight;
+  } catch(e){ toast(e.message); }
+}
+
+refresh();
+setInterval(refresh, 8000);
+</script>
+</body>
+</html>
