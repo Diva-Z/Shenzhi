@@ -40,7 +40,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .modal h3{margin-bottom:16px;font-size:17px}
 .modal .row{display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap}
 .modal label{display:block;font-size:12.5px;color:var(--dim);margin-bottom:5px}
-.modal input[type=text],.modal input[type=number],.modal textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;font-family:inherit}
+.modal input[type=text],.modal input[type=number],.modal textarea,.modal select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;font-family:inherit}
 .modal textarea{resize:vertical;line-height:1.6}
 .modal textarea.md{font-family:Consolas,monospace;font-size:12.5px}
 .f1{flex:1;min-width:150px}
@@ -93,6 +93,14 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
     <div class="row">
       <div class="f1"><label>追问等待 · 最小（分钟）</label><input type="number" id="c-fmin" value="180"></div>
       <div class="f1"><label>追问等待 · 最大（分钟）</label><input type="number" id="c-fmax" value="240"></div>
+    </div>
+    <div class="row">
+      <div class="f1"><label>模型厂商（留空 = 继承默认配置）</label><select id="c-mprov" onchange="provChange('c')"><option value="">继承默认配置</option></select></div>
+      <div class="f1"><label>模型名</label><input type="text" id="c-mname" placeholder="先选厂商"></div>
+    </div>
+    <div class="row" id="c-mapi-row" style="display:none">
+      <div class="f1"><label id="c-mkey-label">API Key（留空 = 用默认配置里的 key）</label><input type="text" id="c-mkey" placeholder="sk-..."></div>
+      <div class="f1" id="c-mbase-box"><label>API Base（可选，留空用官方地址）</label><input type="text" id="c-mbase" placeholder="https://..."></div>
     </div>
     <div class="tabs">
       <button id="tab-form" class="on" onclick="setTab('form')">引导表单</button>
@@ -151,6 +159,14 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
       <div class="f1"><label>再次追问 · 最小（分钟）</label><input type="number" id="e-rmin"></div>
       <div class="f1"><label>再次追问 · 最大（分钟）</label><input type="number" id="e-rmax"></div>
     </div>
+    <div class="row">
+      <div class="f1"><label>模型厂商</label><select id="e-mprov" onchange="provChange('e')"><option value="">不修改</option></select></div>
+      <div class="f1"><label>模型名</label><input type="text" id="e-mname" placeholder="不修改请留空"></div>
+    </div>
+    <div class="row" id="e-mapi-row" style="display:none">
+      <div class="f1"><label id="e-mkey-label">API Key（留空 = 不修改）</label><input type="text" id="e-mkey" placeholder="不修改请留空"></div>
+      <div class="f1" id="e-mbase-box"><label>API Base（留空 = 不修改）</label><input type="text" id="e-mbase" placeholder="https://..."></div>
+    </div>
     <div class="row"><div class="f1"><label>Telegram bot token（留空 = 不修改）</label><input type="text" id="e-tg-token" placeholder="不修改请留空"></div></div>
     <div class="row"><div class="f1"><label>AGENT.md（AI 人设）</label><textarea id="e-agent" class="md" rows="16"></textarea></div></div>
     <div class="row"><div class="f1"><label>USER.md（用户设定）</label><textarea id="e-user" class="md" rows="9"></textarea></div></div>
@@ -203,6 +219,44 @@ async function api(path, opt){
 
 const CH_NAME = {weixin:'微信', telegram:'Telegram', web:'Web'};
 
+/* 模型厂商（数据来自 /api/overview 的 model_providers，单一来源在 master_app.py） */
+let editProviders = null; // 编辑弹窗：该实例各厂商 key 配置状态（来自 persona detail）
+
+function providers(){ return state.model_providers || []; }
+
+function fillProviderSelect(prefix){
+  const sel = $(`${prefix}-mprov`);
+  if(!sel) return;
+  const keep = sel.value;
+  sel.length = 1; // 保留首项「继承默认配置/不修改」
+  for(const p of providers()) sel.add(new Option(p.name, p.id));
+  sel.value = keep;
+}
+
+function provChange(prefix){
+  const pid = $(`${prefix}-mprov`).value;
+  const p = providers().find(x=>x.id===pid);
+  $(`${prefix}-mapi-row`).style.display = p ? '' : 'none';
+  $(`${prefix}-mname`).placeholder = p ? `如 ${p.hint}` : (prefix==='c' ? '先选厂商' : '不修改请留空');
+  if(!p) return;
+  $(`${prefix}-mbase-box`).style.display = p.has_base ? '' : 'none';
+  if(prefix==='e' && editProviders){
+    const ep = editProviders.find(x=>x.id===pid);
+    $('e-mkey-label').textContent = (ep && ep.key_set)
+      ? 'API Key（该实例已配 ✓，留空 = 不修改）'
+      : 'API Key（该实例未配此厂商的 key，必须填写）';
+  }
+}
+
+function modelFields(prefix){
+  return {
+    model_provider: $(`${prefix}-mprov`).value,
+    model_name: $(`${prefix}-mname`).value.trim(),
+    model_api_key: $(`${prefix}-mkey`).value.trim(),
+    model_api_base: $(`${prefix}-mbase`).value.trim(),
+  };
+}
+
 function render(){
   $('run-count').textContent = state.running;
   $('max-count').textContent = state.max_running;
@@ -229,14 +283,17 @@ function render(){
       <div class="card">
         <div class="top"><span class="dot ${p.running?'on':''}"></span><h3>${p.title}</h3><span class="id">${p.id}${p.is_default?' · 默认实例':''}</span></div>
         <div>${chans}${warn}</div>
-        <div class="meta">追问间隔：${fu}　${p.running?('PID '+p.pid):'未运行'}</div>
+        <div class="meta">模型：${p.model||'默认'}　追问间隔：${fu}　${p.running?('PID '+p.pid):'未运行'}</div>
         <div class="btns">${runBtns}<button onclick="openEdit('${p.id}')">编辑</button>${consoleBtn}${qrBtn}<button onclick="openLog('${p.id}')">日志</button></div>
       </div>`);
   }
 }
 
 async function refresh(){
-  try { state = await api('/api/overview'); render(); } catch(e){ toast('刷新失败：' + e.message); }
+  try {
+    state = await api('/api/overview'); render();
+    fillProviderSelect('c'); fillProviderSelect('e');
+  } catch(e){ toast('刷新失败：' + e.message); }
 }
 
 async function act(id, action){
@@ -278,6 +335,7 @@ async function submitCreate(){
     telegram_token: $('c-tg-token').value.trim(),
     followup_min: +$('c-fmin').value||180, followup_max: +$('c-fmax').value||240,
     mode,
+    ...modelFields('c'),
   };
   if(mode==='raw'){ body.agent_md=$('c-agent').value; body.user_md=$('c-userm').value; }
   else body.form = {
@@ -306,6 +364,12 @@ async function openEdit(id){
     $('e-rmin').value = d.followup_repeat_sec ? Math.round(d.followup_repeat_sec[0]/60) : '';
     $('e-rmax').value = d.followup_repeat_sec ? Math.round(d.followup_repeat_sec[1]/60) : '';
     $('e-tg-token').value = '';
+    editProviders = d.model_providers || [];
+    $('e-mprov').value = providers().some(x=>x.id===d.bot_type) ? d.bot_type : '';
+    $('e-mname').value = '';
+    $('e-mname').placeholder = d.model ? `当前 ${d.model}，留空 = 不修改` : '不修改请留空';
+    $('e-mkey').value = ''; $('e-mbase').value = '';
+    provChange('e');
     $('e-agent').value = d.agent_md; $('e-user').value = d.user_md;
     show('m-edit');
   } catch(e){ toast(e.message); }
@@ -316,6 +380,7 @@ async function submitEdit(restart){
     channels: chans('e'), telegram_token: $('e-tg-token').value.trim(),
     followup_min: +$('e-fmin').value||0, followup_max: +$('e-fmax').value||0,
     followup_repeat_min: +$('e-rmin').value||0, followup_repeat_max: +$('e-rmax').value||0,
+    ...modelFields('e'),
     restart,
   };
   if(restart) toast('保存并重启中…（约 10 秒）', 15000);

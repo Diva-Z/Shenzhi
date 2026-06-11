@@ -41,6 +41,90 @@ WEB_PORT_POOL = list(range(9890, 9900))
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,23}$")
 _QR_RE = re.compile(r"二维码链接[^h]*?(https://\S+)")
 
+# 模型厂商注册表：bot_type → (显示名, api_key 配置键, api_base 配置键或 None, 模型名提示)
+# bot_type 与 config-*.json 的 "bot_type" 字段一致（见 common/const.py 与 bridge/bridge.py 的推断规则）。
+MODEL_PROVIDERS = {
+    "mimo":      ("小米 MiMo",         "mimo_api_key",      "mimo_api_base",     "mimo-v2.5-pro / mimo-v2.5 / mimo-v2-flash"),
+    "deepseek":  ("DeepSeek",          "deepseek_api_key",  "deepseek_api_base", "deepseek-v4-flash / deepseek-v4-pro / deepseek-chat"),
+    "dashscope": ("阿里通义 DashScope", "dashscope_api_key", None,                "qwen3.7-max / qwen3-max / qwen-plus / qwen-turbo"),
+    "zhipu":     ("智谱 GLM",           "zhipu_ai_api_key",  None,                "glm-4-plus / glm-4"),
+    "moonshot":  ("月之暗面 Kimi",      "moonshot_api_key",  None,                "kimi-k2 / moonshot-v1-32k"),
+    "minimax":   ("MiniMax",           "minimax_api_key",   None,                "abab6.5-chat"),
+    "gemini":    ("Google Gemini",     "gemini_api_key",    "gemini_api_base",   "gemini-2.5-pro / gemini-2.5-flash"),
+    "claudeAPI": ("Anthropic Claude",  "claude_api_key",    "claude_api_base",   "claude-sonnet-4-6 / claude-opus-4-8"),
+}
+
+
+# 各厂商的模型名前缀（与 bridge/bridge.py 的 bot_type 推断规则一致），
+# 用于拦截「选了厂商 A 却填了厂商 B 的模型名」——bot_type/model 不匹配启动必报错。
+_MODEL_NAME_PREFIXES = {
+    "mimo": ("mimo-",),
+    "deepseek": ("deepseek",),
+    "dashscope": ("qwen", "qwq", "qvq"),
+    "zhipu": ("glm",),
+    "moonshot": ("kimi", "moonshot"),
+    "gemini": ("gemini",),
+    "claudeAPI": ("claude",),
+}
+
+
+def _providers_payload(cfg=None):
+    """前端下拉框数据；带 cfg 时附带该实例各厂商 key 是否已配置。"""
+    out = []
+    for pid, (label, key_field, base_field, hint) in MODEL_PROVIDERS.items():
+        item = {"id": pid, "name": label, "hint": hint, "has_base": bool(base_field)}
+        if cfg is not None:
+            item["key_set"] = bool(cfg.get(key_field))
+        out.append(item)
+    return out
+
+
+def _apply_model_settings(cfg, b):
+    """把表单里的模型/API 设置写进实例配置。
+
+    字段全空 = 不动模型配置（继承现状）。返回 (changed, error)；error 非空时
+    调用方必须放弃保存（校验失败不落盘）。
+    """
+    provider = (b.get("model_provider") or "").strip()
+    model = (b.get("model_name") or "").strip()
+    api_key = (b.get("model_api_key") or "").strip()
+    api_base = (b.get("model_api_base") or "").strip()
+    if not (provider or model or api_key or api_base):
+        return False, None
+    if not provider:
+        return False, "填写了模型/key 但未选择厂商"
+    if provider not in MODEL_PROVIDERS:
+        return False, f"未知模型厂商 {provider}"
+    _, key_field, base_field, hint = MODEL_PROVIDERS[provider]
+
+    changed = False
+    if model:
+        prefixes = _MODEL_NAME_PREFIXES.get(provider)
+        if prefixes and not model.lower().startswith(prefixes):
+            return False, (
+                f"模型名 {model} 不像 {MODEL_PROVIDERS[provider][0]} 的模型"
+                f"（期望前缀 {' / '.join(prefixes)}），请检查厂商选择"
+            )
+        cfg["model"] = model
+        # bot_type 与 model 必须匹配，否则实例启动必报错——一起写
+        cfg["bot_type"] = provider
+        changed = True
+    elif provider != cfg.get("bot_type"):
+        return False, f"更换厂商必须同时填写模型名（如 {hint}）"
+    if api_key:
+        cfg[key_field] = api_key
+        changed = True
+    if api_base:
+        if not base_field:
+            return False, "该厂商走官方 SDK，不支持自定义 API Base"
+        cfg[base_field] = api_base
+        changed = True
+    # 防呆：切到一个 key 为空的厂商会启动失败，提前拦截
+    if model and not cfg.get(key_field):
+        return False, f"厂商 {MODEL_PROVIDERS[provider][0]} 的 API key 为空，请在「API Key」里填写"
+    return changed, None
+
+
 # Keys copied from config.json into a new persona config (shared credentials
 # and model settings). Everything else is set per persona.
 _INHERIT_KEYS = [
@@ -193,6 +277,8 @@ def _persona_info(name):
         "running": pid is not None,
         "pid": pid,
         "channels": channels,
+        "bot_type": cfg.get("bot_type", "") if cfg else "",
+        "model": cfg.get("model", "") if cfg else "",
         "web_port": cfg.get("web_port") if cfg else None,
         "web_console": bool(cfg.get("web_console", True)) if cfg else False,
         "followup_first_sec": cfg.get("followup_first_sec"),
@@ -422,6 +508,7 @@ class Overview:
             "running": sum(1 for p in personas if p["running"]),
             "max_running": MAX_RUNNING,
             "default_persona": _default_persona(),
+            "model_providers": _providers_payload(),
         })
 
 
@@ -433,6 +520,7 @@ class PersonaDetail:
         info = _persona_info(name)
         info["agent_md"] = _read_text(os.path.join(pdir, "AGENT.md"))
         info["user_md"] = _read_text(os.path.join(pdir, "USER.md"))
+        info["model_providers"] = _providers_payload(_load_json(_config_path(name)))
         return _json_resp(info)
 
     def PUT(self, name):
@@ -454,15 +542,22 @@ class PersonaDetail:
                     "400 Bad Request",
                 )
 
+        # 模型/API 设置同样先校验（_apply_model_settings 会改 cfg，校验失败直接返回不落盘）
+        cfg_path = _config_path(name)
+        cfg = _load_json(cfg_path)
+        model_changed = False
+        if cfg:
+            model_changed, err = _apply_model_settings(cfg, b)
+            if err:
+                return _json_resp({"error": err}, "400 Bad Request")
+
         if "agent_md" in b:
             _write_text(os.path.join(pdir, "AGENT.md"), b["agent_md"])
         if "user_md" in b:
             _write_text(os.path.join(pdir, "USER.md"), b["user_md"])
 
-        cfg_path = _config_path(name)
-        cfg = _load_json(cfg_path)
         if cfg:
-            changed = False
+            changed = model_changed
             if b.get("channels"):
                 chans = [c for c in b["channels"] if c in ("weixin", "telegram", "web")]
                 non_web = [c for c in chans if c != "web"]
@@ -525,16 +620,20 @@ class PersonaCreate:
             agent_md = _gen_agent_md(form)
             user_md = _gen_user_md(form)
 
-        os.makedirs(pdir, exist_ok=True)
-        _write_text(os.path.join(pdir, "AGENT.md"), agent_md)
-        _write_text(os.path.join(pdir, "USER.md"), user_md)
-        _write_text(os.path.join(pdir, "MEMORY.md"), "# 长期记忆\n\n")
-
+        # 配置先构建并校验模型设置，全部通过才写盘（避免留下半成品人格目录）
         cfg = _build_persona_config(
             name, channels,
             (b.get("telegram_token") or "").strip(),
             b.get("followup_min") or 180, b.get("followup_max") or 240,
         )
+        _, err = _apply_model_settings(cfg, b)
+        if err:
+            return _json_resp({"error": err}, "400 Bad Request")
+
+        os.makedirs(pdir, exist_ok=True)
+        _write_text(os.path.join(pdir, "AGENT.md"), agent_md)
+        _write_text(os.path.join(pdir, "USER.md"), user_md)
+        _write_text(os.path.join(pdir, "MEMORY.md"), "# 长期记忆\n\n")
         _save_json(_config_path(name), cfg)
         return _json_resp({"ok": True, "id": name, "config_file": os.path.basename(_config_path(name))})
 
