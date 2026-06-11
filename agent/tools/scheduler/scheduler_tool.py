@@ -199,7 +199,16 @@ class SchedulerTool(BaseTool):
             "schedule": schedule,
             "action": action
         }
-        
+
+        # tasks.json 为全实例共享：打上人格戳，其他实例对不属于自己的任务静默跳过
+        try:
+            from config import conf
+            persona = (conf().get("active_persona") or "").strip()
+            if persona:
+                task_data["persona"] = persona
+        except Exception:
+            pass
+
         # Calculate initial next_run_at
         next_run = self._calculate_next_run(task_data)
         if next_run:

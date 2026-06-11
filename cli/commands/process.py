@@ -1,5 +1,6 @@
 """cow start/stop/restart/status/logs - Process management commands."""
 
+import json
 import os
 import sys
 import subprocess
@@ -52,6 +53,32 @@ def _get_config_file(instance: Optional[str] = None) -> str:
     if not instance or instance == "default":
         return "config.json"
     return f"config-{instance}.json"
+
+
+LOG_ROTATE_BYTES = 10 * 1024 * 1024  # rotate at 10 MB on start
+LOG_ROTATE_KEEP = 3  # shenzhi.out.1 (newest) .. shenzhi.out.3 (oldest)
+
+
+def _rotate_log(log_file: str):
+    """Archive the log on start when it has grown past LOG_ROTATE_BYTES.
+
+    shenzhi.out -> shenzhi.out.1 -> ... -> shenzhi.out.N, oldest dropped.
+    Only called while the instance is stopped, so no writer holds the file.
+    """
+    try:
+        if not os.path.exists(log_file) or os.path.getsize(log_file) < LOG_ROTATE_BYTES:
+            return
+        oldest = f"{log_file}.{LOG_ROTATE_KEEP}"
+        if os.path.exists(oldest):
+            os.remove(oldest)
+        for i in range(LOG_ROTATE_KEEP - 1, 0, -1):
+            src = f"{log_file}.{i}"
+            if os.path.exists(src):
+                os.replace(src, f"{log_file}.{i + 1}")
+        os.replace(log_file, f"{log_file}.1")
+        click.echo(f"Rotated large log to {os.path.basename(log_file)}.1")
+    except OSError as e:
+        click.echo(f"Log rotation skipped: {e}")
 
 
 def _is_pid_alive(pid: int) -> bool:
@@ -164,6 +191,7 @@ def start(foreground, no_logs, instance):
             os.execv(python, [python, app_py])
     else:
         log_file = _get_log_file(instance)
+        _rotate_log(log_file)
         click.echo(f"Starting ShenZhi{label}...")
 
         popen_kwargs = dict(cwd=root, env=child_env)
@@ -332,7 +360,17 @@ def status(instance):
     project_root = get_project_root()
     click.echo(_t(f"  路径: {project_root}", f"  Path: {project_root}"))
 
-    cfg = load_config_json()
+    if instance and instance != "default":
+        # Named instances run from config-<name>.json, not config.json
+        cfg = {}
+        instance_cfg_path = os.path.join(project_root, _get_config_file(instance))
+        try:
+            with open(instance_cfg_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            click.echo(click.style(f"  (config not found: {_get_config_file(instance)})", fg="yellow"))
+    else:
+        cfg = load_config_json()
     if cfg:
         channel = cfg.get("channel_type", "unknown")
         if isinstance(channel, list):

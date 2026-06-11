@@ -432,6 +432,16 @@ class ConversationStore:
             # Strip thinking blocks — they are stored for UI display only
             if role == "assistant" and isinstance(content, list):
                 content = [b for b in content if b.get("type") != "thinking"]
+            # 治污：剥掉历史回复里已落库的泄漏独白，否则模型会模仿
+            # 自己旧回复的「独白+正文」格式，泄漏自我强化（2026-06-11）
+            if role == "assistant":
+                from common.monologue_filter import strip_leaked_monologue
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+                            block["text"] = strip_leaked_monologue(block["text"])
+                elif isinstance(content, str) and content:
+                    content = strip_leaked_monologue(content)
             result.append({"role": role, "content": content})
         return result
 

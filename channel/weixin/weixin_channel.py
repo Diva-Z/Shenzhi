@@ -226,7 +226,9 @@ class WeixinChannel(ChatChannel):
         if conf().get("weixin_followup_enabled", True):
             t = threading.Thread(target=self._followup_check_loop, daemon=True, name="weixin-followup")
             t.start()
-            logger.info("[Weixin] Follow-up nudge enabled (3-4h first, 6-8h after nudge)")
+            first = conf().get("followup_first_sec", [10800, 14400])
+            repeat = conf().get("followup_repeat_sec", [21600, 28800])
+            logger.info(f"[Weixin] Follow-up nudge enabled (first {first}s, repeat {repeat}s)")
 
         self._poll_loop()
 

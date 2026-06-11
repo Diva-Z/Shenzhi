@@ -67,6 +67,18 @@ def init_scheduler(agent_bridge) -> bool:
                     channel_type = action.get("channel_type", "unknown")
                     receiver = action.get("receiver", "")
 
+                    # tasks.json 全实例共享：带人格戳且不属于本实例的任务静默跳过
+                    # （留给所属实例执行），避免每 tick 打 deferring 警告刷日志
+                    task_persona = (task.get("persona") or "").strip()
+                    if task_persona:
+                        my_persona = (conf().get("active_persona") or "").strip()
+                        if task_persona != my_persona:
+                            logger.debug(
+                                f"[Scheduler] Task {task.get('id')} belongs to "
+                                f"persona '{task_persona}', skipping silently"
+                            )
+                            return False
+
                     if not _is_channel_ready(channel_type, receiver):
                         logger.warning(
                             f"[Scheduler] Task {task.get('id')}: channel "

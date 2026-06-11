@@ -144,8 +144,12 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
           <label><input type="checkbox" id="e-ch-web"> Web</label>
         </div>
       </div>
-      <div class="f1"><label>追问最小（分钟）</label><input type="number" id="e-fmin"></div>
-      <div class="f1"><label>追问最大（分钟）</label><input type="number" id="e-fmax"></div>
+      <div class="f1"><label>首次追问 · 最小（分钟）</label><input type="number" id="e-fmin"></div>
+      <div class="f1"><label>首次追问 · 最大（分钟）</label><input type="number" id="e-fmax"></div>
+    </div>
+    <div class="row">
+      <div class="f1"><label>再次追问 · 最小（分钟）</label><input type="number" id="e-rmin"></div>
+      <div class="f1"><label>再次追问 · 最大（分钟）</label><input type="number" id="e-rmax"></div>
     </div>
     <div class="row"><div class="f1"><label>Telegram bot token（留空 = 不修改）</label><input type="text" id="e-tg-token" placeholder="不修改请留空"></div></div>
     <div class="row"><div class="f1"><label>AGENT.md（AI 人设）</label><textarea id="e-agent" class="md" rows="16"></textarea></div></div>
@@ -163,7 +167,7 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
 <div class="mask" id="m-qr">
   <div class="modal" style="width:380px">
     <h3>微信扫码登录</h3>
-    <div id="qrbox"><img id="qr-img" src="" alt="二维码加载中"><p class="hint">用目标用户本人的微信扫码（bot 与第一个扫码号永久绑定）。<br>二维码每 2 分钟自动换新，本窗口每 20 秒自动刷新。</p></div>
+    <div id="qrbox"><img id="qr-img" src="" alt="二维码加载中"><p class="hint" id="qr-hint">用目标用户本人的微信扫码（bot 与第一个扫码号永久绑定）。<br>二维码每 2 分钟自动换新，本窗口每 20 秒自动刷新。</p></div>
     <div class="foot"><button onclick="stopQr()">关闭</button></div>
   </div>
 </div>
@@ -205,7 +209,13 @@ function render(){
   const g = $('grid'); g.innerHTML = '';
   for(const p of state.personas){
     const chans = p.channels.map(c=>`<span class="tag">${CH_NAME[c]||c}</span>`).join('');
-    const fu = p.followup_first_sec ? `${Math.round(p.followup_first_sec[0]/60)}-${Math.round(p.followup_first_sec[1]/60)} 分钟` : '默认';
+    const rng = s => `${Math.round(s[0]/60)}-${Math.round(s[1]/60)}`;
+    let fu = '默认';
+    if(p.followup_first_sec){
+      const first = rng(p.followup_first_sec);
+      const rep = p.followup_repeat_sec ? rng(p.followup_repeat_sec) : first;
+      fu = rep === first ? `${first} 分钟` : `首次 ${first} / 再次 ${rep} 分钟`;
+    }
     let warn = '';
     if(p.channels.includes('weixin') && p.weixin_logged_in === false) warn += `<span class="tag hl">微信未登录</span>`;
     if(p.channels.includes('telegram') && !p.telegram_token_set) warn += `<span class="tag hl">缺 TG token</span>`;
@@ -293,6 +303,8 @@ async function openEdit(id){
     ['weixin','telegram','web'].forEach(c=>$(`e-ch-${c}`).checked = d.channels.includes(c));
     $('e-fmin').value = d.followup_first_sec ? Math.round(d.followup_first_sec[0]/60) : '';
     $('e-fmax').value = d.followup_first_sec ? Math.round(d.followup_first_sec[1]/60) : '';
+    $('e-rmin').value = d.followup_repeat_sec ? Math.round(d.followup_repeat_sec[0]/60) : '';
+    $('e-rmax').value = d.followup_repeat_sec ? Math.round(d.followup_repeat_sec[1]/60) : '';
     $('e-tg-token').value = '';
     $('e-agent').value = d.agent_md; $('e-user').value = d.user_md;
     show('m-edit');
@@ -303,6 +315,7 @@ async function submitEdit(restart){
     agent_md: $('e-agent').value, user_md: $('e-user').value,
     channels: chans('e'), telegram_token: $('e-tg-token').value.trim(),
     followup_min: +$('e-fmin').value||0, followup_max: +$('e-fmax').value||0,
+    followup_repeat_min: +$('e-rmin').value||0, followup_repeat_max: +$('e-rmax').value||0,
     restart,
   };
   if(restart) toast('保存并重启中…（约 10 秒）', 15000);
@@ -313,11 +326,42 @@ async function submitEdit(restart){
 }
 
 /* 二维码 */
+const QR_HINT_DEFAULT = '用目标用户本人的微信扫码（bot 与第一个扫码号永久绑定）。<br>二维码每 2 分钟自动换新，本窗口每 20 秒自动刷新。';
+function qrHint(html){ $('qr-hint').innerHTML = html; }
+
+async function loadQr(id, allowRevive){
+  let r = await fetch(`/api/qr/${id}?t=${Date.now()}`);
+  if (r.status === 410 && allowRevive){
+    // 登录窗口已超时：重启实例拉新码（即点即扫）
+    qrHint('⏳ 二维码已过期，正在重启实例获取新码（约半分钟，请勿关闭窗口）…');
+    $('qr-img').style.visibility = 'hidden';
+    const rr = await fetch(`/api/qr/${id}/refresh`, {method:'POST'});
+    const j = await rr.json().catch(()=>({}));
+    if (!j.ok){ qrHint('❌ ' + (j.error || '获取新码失败，请查看日志')); return; }
+    r = await fetch(`/api/qr/${id}?t=${Date.now()}`);
+  }
+  if (r.ok && (r.headers.get('Content-Type')||'').includes('image')){
+    const blob = await r.blob();
+    $('qr-img').src = URL.createObjectURL(blob);
+    $('qr-img').style.visibility = 'visible';
+    qrHint(QR_HINT_DEFAULT);
+  } else if (r.status === 410){
+    $('qr-img').style.visibility = 'hidden';
+    qrHint('⚠️ 二维码已过期。重新点击「微信二维码」按钮即可重启实例获取新码。');
+    clearInterval(qrTimer);
+  } else {
+    const j = await r.json().catch(()=>({}));
+    $('qr-img').style.visibility = 'hidden';
+    qrHint('❌ ' + (j.error || '暂无二维码（实例未运行或已登录）'));
+  }
+}
+
 function openQr(id){
   show('m-qr');
-  const load = ()=>{ $('qr-img').src = `/api/qr/${id}?t=${Date.now()}`; };
-  load();
-  qrTimer = setInterval(load, 20000);
+  qrHint('二维码加载中…');
+  loadQr(id, true).catch(e=>qrHint('❌ 加载失败：' + e.message));
+  // 周期刷新只换图，不触发重启；过期由用户重新点按钮或下次打开时复活
+  qrTimer = setInterval(()=>loadQr(id, false).catch(()=>{}), 20000);
 }
 function stopQr(){ hide('m-qr'); clearInterval(qrTimer); }
 

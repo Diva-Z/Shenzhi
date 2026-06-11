@@ -140,16 +140,43 @@ def _weixin_logged_in(cfg):
     return bool(data.get("token"))
 
 
-def _latest_qr_url(name):
-    """Last printed WeChat QR link in the instance log, if any."""
-    log = os.path.join(PROJECT_ROOT, os.path.basename(_get_log_file(_instance_arg(name))))
+def _instance_log_path(name):
+    return os.path.join(PROJECT_ROOT, os.path.basename(_get_log_file(_instance_arg(name))))
+
+
+def _log_tail_text(name, size=60000):
     try:
-        with open(log, "r", encoding="utf-8", errors="replace") as f:
-            tail = f.read()[-60000:]
+        with open(_instance_log_path(name), "r", encoding="utf-8", errors="replace") as f:
+            return f.read()[-size:]
     except Exception:
         return ""
-    hits = _QR_RE.findall(tail)
+
+
+def _latest_qr_url(name):
+    """Last printed WeChat QR link in the instance log, if any."""
+    hits = _QR_RE.findall(_log_tail_text(name))
     return hits[-1] if hits else ""
+
+
+# Markers weixin_channel prints once the QR login window is dead (polling
+# stopped); a QR link with one of these after it can no longer be scanned.
+_QR_DEAD_MARKERS = ("QR login timed out", "giving up", "二维码登录超时")
+
+
+def _qr_login_dead(name):
+    """True when the log's last QR link belongs to an already-closed login
+    window (timeout / refresh give-up) or the instance is not running, i.e.
+    scanning the displayed code would do nothing and a restart is needed."""
+    if _read_pid(_instance_arg(name)) is None:
+        return True
+    tail = _log_tail_text(name)
+    last_qr = None
+    for m in _QR_RE.finditer(tail):
+        last_qr = m
+    if last_qr is None:
+        return True
+    after = tail[last_qr.end():]
+    return any(marker in after for marker in _QR_DEAD_MARKERS)
 
 
 def _persona_info(name):
@@ -363,6 +390,7 @@ urls = (
     "/api/instance/([a-z0-9_-]+)/(start|stop|restart)", "InstanceAction",
     "/api/instances/(start_all|stop_all)", "InstanceBulk",
     "/api/qr/([a-z0-9_-]+)", "QrImage",
+    "/api/qr/([a-z0-9_-]+)/refresh", "QrFresh",
     "/api/log/([a-z0-9_-]+)", "LogTail",
 )
 
@@ -412,6 +440,20 @@ class PersonaDetail:
         if not os.path.isdir(pdir):
             return _json_resp({"error": "人格不存在"}, "404 Not Found")
         b = _body()
+
+        # 校验先于一切写盘：勾选 Telegram 但既没有已存 token 也没新填 → 拒绝，
+        # 否则实例启动必失败且错误只出现在日志里（「新建」有同款校验，编辑曾漏）
+        if b.get("channels"):
+            existing_cfg = _load_json(_config_path(name))
+            requested = [c for c in b["channels"] if c in ("weixin", "telegram", "web")]
+            if ("telegram" in requested
+                    and not (b.get("telegram_token") or "").strip()
+                    and not existing_cfg.get("telegram_token")):
+                return _json_resp(
+                    {"error": "选择 Telegram 渠道必须填入 bot token（@BotFather 创建）"},
+                    "400 Bad Request",
+                )
+
         if "agent_md" in b:
             _write_text(os.path.join(pdir, "AGENT.md"), b["agent_md"])
         if "user_md" in b:
@@ -435,6 +477,12 @@ class PersonaDetail:
             if b.get("followup_min") and b.get("followup_max"):
                 lo, hi = int(b["followup_min"]) * 60, int(b["followup_max"]) * 60
                 cfg["followup_first_sec"] = [lo, hi]
+                # 旧版前端只有一组字段时保持原行为：两组同值
+                if not (b.get("followup_repeat_min") and b.get("followup_repeat_max")):
+                    cfg["followup_repeat_sec"] = [lo, hi]
+                changed = True
+            if b.get("followup_repeat_min") and b.get("followup_repeat_max"):
+                lo, hi = int(b["followup_repeat_min"]) * 60, int(b["followup_repeat_max"]) * 60
                 cfg["followup_repeat_sec"] = [lo, hi]
                 changed = True
             if changed:
@@ -520,6 +568,9 @@ class QrImage:
         url = _latest_qr_url(name)
         if not url:
             return _json_resp({"error": "暂无二维码（实例未运行或已登录）"}, "404 Not Found")
+        if _qr_login_dead(name):
+            # 登录窗口已超时，日志里的码是死码：前端据此走 /refresh 重启拉新码
+            return _json_resp({"error": "二维码已过期，登录窗口已关闭"}, "410 Gone")
         try:
             import qrcode
             img = qrcode.make(url)
@@ -531,6 +582,53 @@ class QrImage:
             return buf.getvalue()
         except Exception:
             return _json_resp({"qr_url": url})
+
+
+class QrFresh:
+    """Revive a dead WeChat QR login: restart the instance, wait for the
+    fresh QR link to show up in the log, so the console modal is
+    click-to-scan even after the 480s login window expired."""
+
+    def POST(self, name):
+        cfg = _load_json(_config_path(name))
+        if not cfg:
+            return _json_resp({"ok": False, "error": "配置文件不存在"}, "404 Not Found")
+        if "weixin" not in _persona_channels(cfg):
+            return _json_resp({"ok": False, "error": "该人格未启用微信渠道"}, "400 Bad Request")
+        if _weixin_logged_in(cfg):
+            return _json_resp({"ok": False, "error": "微信已登录，无需扫码"}, "400 Bad Request")
+
+        if not _qr_login_dead(name):
+            return _json_resp({"ok": True, "restarted": False})  # 现有码仍有效
+
+        # 记录重启前日志长度，只认重启后新打印的二维码
+        log = _instance_log_path(name)
+        try:
+            offset = os.path.getsize(log)
+        except OSError:
+            offset = 0
+
+        with _op_lock:
+            ok, msg = _instance_action(name, "restart")
+        if not ok:
+            return _json_resp({"ok": False, "error": f"实例重启失败：{msg}"}, "409 Conflict")
+
+        # 等新二维码出现（渠道初始化 + 取码通常 5-30s）
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            try:
+                with open(log, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(offset)
+                    fresh = f.read()
+            except Exception:
+                fresh = ""
+            if _QR_RE.search(fresh):
+                return _json_resp({"ok": True, "restarted": True})
+            time.sleep(2)
+        return _json_resp(
+            {"ok": False, "error": "重启后 90 秒内未获取到新二维码，请查看日志"},
+            "504 Gateway Timeout",
+        )
 
 
 class LogTail:

@@ -767,4 +767,17 @@ def _build_runtime_section(runtime_info: Dict[str, Any], language: str) -> List[
         lines.append(("Runtime: " if is_en else "运行时: ") + " | ".join(runtime_parts))
         lines.append("")
 
+    # Hard output rule: some models (mimo-v2.5 with thinking off) leak their
+    # reasoning monologue into the reply text. State the contract explicitly.
+    lines.append(
+        "🚫 Your reply must contain ONLY the words to send to the other person. "
+        "Never include reasoning, persona analysis, narration, or meta commentary "
+        "about how you should reply."
+        if is_en else
+        "🚫 你的回复必须只包含要发给对方的话本身，"
+        "绝不能出现思考过程、对人设或如何回复的分析、旁白式自我说明"
+        "（如「按照人设…」「会简短回应」这类文字）。"
+    )
+    lines.append("")
+
     return lines

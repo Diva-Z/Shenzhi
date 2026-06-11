@@ -302,10 +302,12 @@ class TelegramChannel(ChatChannel):
         self.report_startup_success()
         logger.info("[Telegram] ✅ Telegram bot ready, polling for updates")
 
-        # Start follow-up nudge loop (3-4h before first nudge, 6-8h after a nudge)
+        # Start follow-up nudge loop (cadence from followup_first_sec / followup_repeat_sec)
         if conf().get("telegram_followup_enabled", True):
             asyncio.ensure_future(self._followup_check_loop())
-            logger.info("[Telegram] Follow-up nudge enabled (3-4h first, 6-8h after nudge)")
+            first = conf().get("followup_first_sec", [10800, 14400])
+            repeat = conf().get("followup_repeat_sec", [21600, 28800])
+            logger.info(f"[Telegram] Follow-up nudge enabled (first {first}s, repeat {repeat}s)")
 
         # Watchdog: restart updater if no message received in 20 min (proxy disconnect)
         asyncio.ensure_future(self._polling_watchdog(application))

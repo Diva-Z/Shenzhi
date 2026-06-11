@@ -53,6 +53,7 @@ config-*.json
 
 # ── 运行时产物（日志/语音缓存含对话内容，绝不提交）──────
 *.out
+*.out.[0-9]
 *.pid
 static/
 run.log

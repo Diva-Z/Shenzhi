@@ -1069,6 +1069,11 @@ class AgentStreamExecutor:
 
         # Filter full_content one more time (in case tags were split across chunks)
         full_content = self._filter_think_tags(full_content)
+
+        # mimo-v2.5 在 thinking 关闭时会间歇性把推理独白写进 content 开头，
+        # 必须在入历史/发送前剥掉，否则模型会模仿历史里的独白格式自我强化
+        from common.monologue_filter import strip_leaked_monologue
+        full_content = strip_leaked_monologue(full_content)
         
         # Add assistant message to history (Claude format uses content blocks)
         assistant_msg = {"role": "assistant", "content": []}
