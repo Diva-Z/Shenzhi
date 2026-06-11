@@ -361,6 +361,7 @@ urls = (
     "/api/persona", "PersonaCreate",
     "/api/persona/([a-z0-9_-]+)", "PersonaDetail",
     "/api/instance/([a-z0-9_-]+)/(start|stop|restart)", "InstanceAction",
+    "/api/instances/(start_all|stop_all)", "InstanceBulk",
     "/api/qr/([a-z0-9_-]+)", "QrImage",
     "/api/log/([a-z0-9_-]+)", "LogTail",
 )
@@ -495,6 +496,23 @@ class InstanceAction:
         with _op_lock:
             ok, msg = _instance_action(name, action)
         return _json_resp({"ok": ok, "message": msg}, "200 OK" if ok else "409 Conflict")
+
+
+class InstanceBulk:
+    """One-click start/stop of every persona instance."""
+
+    def POST(self, action):
+        results = []
+        with _op_lock:
+            for p in _list_personas():
+                name = p["id"]
+                if action == "stop_all" and p["running"]:
+                    ok, _ = _instance_action(name, "stop")
+                    results.append(f"{p['title']}: {'已停止' if ok else '停止失败'}")
+                elif action == "start_all" and not p["running"] and p["config_exists"]:
+                    ok, msg = _instance_action(name, "start")
+                    results.append(f"{p['title']}: {'已启动' if ok else msg}")
+        return _json_resp({"ok": True, "results": results or ["无需操作（状态已是目标状态）"]})
 
 
 class QrImage:

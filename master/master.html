@@ -64,7 +64,11 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
 <div class="wrap">
   <div class="toolbar">
     <h2>人格实例（一个人格 = 独立人设 + 独立记忆 + 独立 bot 进程）</h2>
-    <button class="primary" onclick="openCreate()">＋ 新建人格</button>
+    <div style="display:flex;gap:8px">
+      <button onclick="bulk('start_all')">▶ 全部启动</button>
+      <button class="danger" onclick="bulk('stop_all')">■ 全部停止</button>
+      <button class="primary" onclick="openCreate()">＋ 新建人格</button>
+    </div>
   </div>
   <div class="grid" id="grid"></div>
 </div>
@@ -230,6 +234,15 @@ async function act(id, action){
   try {
     const d = await api(`/api/instance/${id}/${action}`, {method:'POST'});
     toast(d.ok ? {start:'已启动',stop:'已停止',restart:'已重启'}[action] : d.message);
+  } catch(e){ toast(e.message, 6000); }
+  refresh();
+}
+
+async function bulk(action){
+  toast(action==='stop_all' ? '正在停止全部实例…' : '正在启动全部实例…', 30000);
+  try {
+    const d = await api(`/api/instances/${action}`, {method:'POST'});
+    toast(d.results.join('；'), 8000);
   } catch(e){ toast(e.message, 6000); }
   refresh();
 }
