@@ -1,6 +1,22 @@
 import logging
 import sys
 import io
+import os
+import re
+
+
+def _log_file_name():
+    instance = (os.environ.get("SHENZHI_INSTANCE") or "").strip()
+    if not instance:
+        config_path = os.environ.get("SHENZHI_CONFIG") or os.environ.get("COW_CONFIG") or ""
+        base = os.path.basename(config_path)
+        if base.startswith("config-") and base.endswith(".json"):
+            instance = base[len("config-"):-len(".json")]
+    if instance:
+        safe = re.sub(r"[^a-zA-Z0-9_-]+", "-", instance).strip("-")
+        if safe and safe != "default":
+            return f"run-{safe}.log"
+    return "run.log"
 
 
 def _reset_logger(log):
@@ -20,7 +36,7 @@ def _reset_logger(log):
             datefmt="%Y-%m-%d %H:%M:%S",
         )
     )
-    file_handle = logging.FileHandler("run.log", encoding="utf-8")
+    file_handle = logging.FileHandler(_log_file_name(), encoding="utf-8")
     file_handle.setFormatter(
         logging.Formatter(
             "[%(levelname)s][%(asctime)s][%(filename)s:%(lineno)d] - %(message)s",

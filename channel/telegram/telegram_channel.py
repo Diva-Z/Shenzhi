@@ -65,14 +65,20 @@ def _build_followup_task(last_msg_clean: str, elapsed: float = 0) -> str:
         gap = f"约{round(hrs)}小时"
     else:
         gap = f"约{round(hrs / 24)}天"
+    if last_msg_clean:
+        opening = f"你之前说了：「{last_msg_clean}」，但他已经{gap}没有回复了。"
+    else:
+        opening = f"你上次发完消息后，他已经{gap}没有回复了。"
     return (
-        f"你之前说了：「{last_msg_clean}」，"
-        f"但他已经{gap}没有回复了。"
+        opening +
         "以你自己的口吻，用一句话自然地追问。"
         "结合现在的时间和已经过去的时长：如果原来话题对应的时间点（比如午饭、出门、睡前）已经过去了，"
         "就顺着现在的情况问（例如把“打算吃什么午饭”改成“中午吃了啥”），不要当作刚说完那样追问。"
         "不要质问他为什么不回复，也不要显得在意或控制，语气可以比平时淡一点、短一点。"
         "如果要说两句用[MSG]分开。直接说话，不要加任何解释性前缀。"
+        "如果你根据自己的性格和当下情况判断这次不该再追问（比如已经追问过、不想显得追得太紧），"
+        "就只输出 [SKIP] 这一个标记，系统会静默跳过这次追问，什么都不会发给他；"
+        "不要解释为什么跳过，也不要把你的考虑写出来。"
     )
 
 
@@ -124,15 +130,35 @@ def _followup_delay_for(is_followup: bool) -> int:
     import random as _random
     if is_followup:
         rng, default = conf().get("followup_repeat_sec", [21600, 28800]), (21600, 28800)
+        first_rng = conf().get("followup_first_sec", [10800, 14400])
     else:
         rng, default = conf().get("followup_first_sec", [10800, 14400]), (10800, 14400)
+        first_rng = None
     try:
         lo, hi = int(rng[0]), int(rng[1])
     except Exception:
         lo, hi = default
     if lo > hi:
         lo, hi = hi, lo
+    if is_followup:
+        try:
+            first_lo, first_hi = int(first_rng[0]), int(first_rng[1])
+            if first_lo > first_hi:
+                first_lo, first_hi = first_hi, first_lo
+            if [lo, hi] == [first_lo, first_hi]:
+                lo = max(first_hi * 3, 1800)
+                hi = max(first_hi * 5, lo + 600, 3600)
+        except Exception:
+            pass
     return _random.randint(lo, hi)
+
+
+def _followup_max_count() -> int:
+    """Maximum consecutive follow-up messages before stopping; 0 means unlimited."""
+    try:
+        return max(0, int(conf().get("followup_max_count", 0) or 0))
+    except Exception:
+        return 0
 
 
 @singleton
@@ -158,6 +184,7 @@ class TelegramChannel(ChatChannel):
         self._followup_fired = {}      # str(chat_id) -> bool
         self._followup_delay = {}      # str(chat_id) -> int (seconds until next nudge)
         self._followup_stopped = {}    # str(chat_id) -> bool (user ended the chat -> no nudge)
+        self._followup_count = {}      # str(chat_id) -> consecutive follow-ups sent
         self._last_update_received = datetime.now()  # watchdog: last inbound message time
         # Guards all follow-up state dicts above. They are read/written from both
         # the cow consume thread (send / _on_message) and the asyncio loop thread
@@ -503,6 +530,7 @@ class TelegramChannel(ChatChannel):
                         self._last_user_msg_time[str_cid] = datetime.now()
                         self._followup_fired[str_cid] = False
                         self._followup_stopped[str_cid] = terminating
+                        self._followup_count[str_cid] = 0
             logger.debug(f"[Telegram] received: type={ctype}, content={str(tg_msg.content)[:80]}")
 
         except Exception as e:
@@ -596,6 +624,8 @@ class TelegramChannel(ChatChannel):
                 "last_bot_msg_text": dict(self._last_bot_msg_text),
                 "followup_fired": dict(self._followup_fired),
                 "followup_delay": dict(self._followup_delay),
+                "followup_stopped": dict(self._followup_stopped),
+                "followup_count": dict(self._followup_count),
             }
         try:
             os.makedirs(os.path.dirname(self._STATE_FILE), exist_ok=True)
@@ -626,6 +656,13 @@ class TelegramChannel(ChatChannel):
                     self._followup_fired[k] = state["followup_fired"][k]
                 if k in state.get("followup_delay", {}):
                     self._followup_delay[k] = state["followup_delay"][k]
+                if k in state.get("followup_stopped", {}):
+                    self._followup_stopped[k] = bool(state["followup_stopped"][k])
+                if k in state.get("followup_count", {}):
+                    try:
+                        self._followup_count[k] = max(0, int(state["followup_count"][k]))
+                    except Exception:
+                        self._followup_count[k] = 0
                 # Restore the user's last-reply time too, so a nudge isn't sent
                 # for a chat the user actually answered just before the restart.
                 if k in state.get("last_user_msg_time", {}):
@@ -692,12 +729,27 @@ class TelegramChannel(ChatChannel):
     async def _maybe_send_followups(self):
         import random as _random
         now = datetime.now()
+        max_count = _followup_max_count()
         # Decide who needs a nudge under the lock and mark them fired, then do the
         # actual (awaiting) send outside the lock so we never hold it across await.
         to_nudge = []
+        state_changed = False
         with self._followup_lock:
             for chat_id, sent_at in list(self._last_bot_msg_time.items()):
+                if self._followup_stopped.get(chat_id, False):
+                    self._followup_fired[chat_id] = True
+                    continue
                 if self._followup_fired.get(chat_id, False):
+                    continue
+                sent_count = int(self._followup_count.get(chat_id, 0) or 0)
+                if max_count > 0 and sent_count >= max_count:
+                    self._followup_fired[chat_id] = True
+                    self._followup_stopped[chat_id] = True
+                    state_changed = True
+                    logger.info(
+                        f"[Telegram] followup limit reached for {chat_id} "
+                        f"({sent_count}/{max_count}), stopping nudges"
+                    )
                     continue
                 delay_sec = self._followup_delay.get(chat_id) or _followup_delay_for(False)
                 elapsed = (now - sent_at).total_seconds()
@@ -705,6 +757,7 @@ class TelegramChannel(ChatChannel):
                     continue
                 # Mark fired regardless: either the user replied (skip) or we nudge once.
                 self._followup_fired[chat_id] = True
+                state_changed = True
                 last_user = self._last_user_msg_time.get(chat_id)
                 if last_user and last_user >= sent_at:
                     continue
@@ -712,7 +765,7 @@ class TelegramChannel(ChatChannel):
         for chat_id, elapsed in to_nudge:
             logger.info(f"[Telegram] No reply in {int(elapsed)}s, sending followup to {chat_id}")
             await self._trigger_followup(chat_id, elapsed)
-        if to_nudge:
+        if to_nudge or state_changed:
             self._save_followup_state(force=True)
 
     async def _trigger_followup(self, chat_id: str, elapsed: float = 0):
@@ -722,6 +775,11 @@ class TelegramChannel(ChatChannel):
             # Strip [MSG] markers so the agent sees clean text
             import re as _re
             last_msg_clean = _re.sub(r'\[MSG\]', ' ', last_msg, flags=_re.IGNORECASE).strip()
+            from common.monologue_filter import is_probable_full_monologue, strip_leaked_monologue
+            last_msg_clean = strip_leaked_monologue(last_msg_clean).strip()
+            if is_probable_full_monologue(last_msg_clean):
+                logger.warning("[Telegram] followup seed dropped because it still looks like monologue")
+                last_msg_clean = ""
             task = _build_followup_task(last_msg_clean, elapsed)
             context = Context(ContextType.TEXT, task)
             context["receiver"] = str(chat_id)
@@ -879,10 +937,23 @@ class TelegramChannel(ChatChannel):
                 with self._followup_lock:
                     self._last_bot_msg_time[str_cid] = datetime.now()
                     self._last_bot_msg_text[str_cid] = track_text
+                    if is_followup:
+                        self._followup_count[str_cid] = int(self._followup_count.get(str_cid, 0) or 0) + 1
+                    else:
+                        self._followup_count[str_cid] = 0
+                    sent_count = self._followup_count[str_cid]
+                    max_count = _followup_max_count()
                     if self._followup_stopped.get(str_cid, False):
                         # User ended the conversation (去忙了/待会聊...) — suppress
                         # nudging until they message again (which clears the flag).
                         self._followup_fired[str_cid] = True
+                    elif max_count > 0 and sent_count >= max_count:
+                        self._followup_fired[str_cid] = True
+                        self._followup_stopped[str_cid] = True
+                        logger.info(
+                            f"[Telegram] followup limit reached for {str_cid} "
+                            f"({sent_count}/{max_count}), stopping nudges"
+                        )
                     else:
                         # Keep nudging on silence; cadence is per-instance config
                         # (followup_first_sec / followup_repeat_sec).

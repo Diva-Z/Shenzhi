@@ -709,7 +709,7 @@ class AgentBridge:
         Adds new keys and updates changed values on each startup.
 
         Args:
-            workspace_root: Workspace directory path (not used, kept for compatibility)
+            workspace_root: Workspace directory path where .env should live.
         """
         from config import conf
         import os
@@ -722,7 +722,7 @@ class AgentBridge:
             "linkai_api_key": "LINKAI_API_KEY",
         }
         
-        env_file = expand_path("~/.cow/.env")
+        env_file = os.path.join(expand_path(workspace_root), ".env")
         
         # Read existing env vars (key -> value)
         existing_env_vars = {}
@@ -756,7 +756,6 @@ class AgentBridge:
                 existing_env_vars.pop(env_key, None)
                 os.environ.pop(env_key, None)
                 updated = True
-            updated = True
 
         if updated:
             try:
@@ -769,7 +768,7 @@ class AgentBridge:
                     for key, value in sorted(existing_env_vars.items()):
                         f.write(f'{key}={value}\n')
 
-                logger.info(f"[AgentBridge] Synced API keys from config.json to .env")
+                logger.info(f"[AgentBridge] Synced API keys from config.json to {env_file}")
             except Exception as e:
                 logger.warning(f"[AgentBridge] Failed to sync API keys: {e}")
     

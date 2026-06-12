@@ -226,11 +226,12 @@ class AgentInitializer:
         if persona and not os.path.exists(os.path.join(memory_workspace, "AGENT.md")):
             self._warn_missing_persona(persona, memory_workspace)
 
-        # Migrate API keys
-        self._migrate_config_to_env(workspace_root)
+        # Migrate API keys into the effective agent home. Persona instances
+        # must not overwrite each other's env files.
+        self._migrate_config_to_env(agent_home)
 
         # Load environment variables
-        self._load_env_file()
+        self._load_env_file(workspace_root, agent_home)
 
         # Initialize workspace
         from agent.prompt import ensure_workspace, load_context_files, PromptBuilder
@@ -448,17 +449,27 @@ class AgentInitializer:
 
         return filtered
     
-    def _load_env_file(self):
+    def _load_env_file(self, workspace_root: Optional[str] = None, agent_home: Optional[str] = None):
         """Load environment variables from .env file"""
-        env_file = expand_path("~/.cow/.env")
-        if os.path.exists(env_file):
+        env_files = []
+        if workspace_root:
+            env_files.append(os.path.join(workspace_root, ".env"))
+        if agent_home and agent_home != workspace_root:
+            env_files.append(os.path.join(agent_home, ".env"))
+        if not env_files:
+            env_files.append(os.path.join(expand_path("~/cow"), ".env"))
+        for env_file in env_files:
+            if not os.path.exists(env_file):
+                continue
             try:
                 from dotenv import load_dotenv
                 load_dotenv(env_file, override=True)
+                logger.info(f"[AgentInitializer] Loaded environment variables from {env_file}")
             except ImportError:
                 logger.warning("[AgentInitializer] python-dotenv not installed")
+                break
             except Exception as e:
-                logger.warning(f"[AgentInitializer] Failed to load .env file: {e}")
+                logger.warning(f"[AgentInitializer] Failed to load .env file {env_file}: {e}")
     
     def _setup_memory_system(self, workspace_root: str, session_id: Optional[str] = None,
                              memory_workspace: Optional[str] = None):
@@ -902,7 +913,7 @@ class AgentInitializer:
             "linkai_api_key": "LINKAI_API_KEY",
         }
         
-        env_file = expand_path("~/.cow/.env")
+        env_file = os.path.join(expand_path(workspace_root), ".env")
         
         # Read existing env vars (key -> value)
         existing_env_vars = {}
@@ -949,7 +960,7 @@ class AgentInitializer:
                     for key, value in sorted(existing_env_vars.items()):
                         f.write(f'{key}={value}\n')
 
-                logger.info(f"[AgentInitializer] Synced API keys from config.json to .env")
+                logger.info(f"[AgentInitializer] Synced API keys from config.json to {env_file}")
             except Exception as e:
                 logger.warning(f"[AgentInitializer] Failed to sync API keys: {e}")
 
@@ -992,6 +1003,9 @@ class AgentInitializer:
         from common.utils import expand_path
         from config import conf
         workspace = expand_path(conf().get("agent_workspace", "~/cow"))
+        persona = self._active_persona()
+        if persona:
+            return os.path.join(workspace, "personas", persona, "memory", ".daily_flush_state.json")
         return os.path.join(workspace, "memory", ".daily_flush_state.json")
 
     def _record_flush_date(self, d=None):

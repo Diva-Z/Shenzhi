@@ -152,6 +152,39 @@ def _clean_display_text(text: str) -> str:
     return cleaned
 
 
+def _sanitize_assistant_content(content: Any) -> Any:
+    """Remove leaked reasoning from assistant text blocks before LLM/UI use."""
+    from common.monologue_filter import control_marker_drop_reason, strip_leaked_monologue
+
+    if isinstance(content, list):
+        cleaned_blocks = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                block = dict(block)
+                text = strip_leaked_monologue(block.get("text", ""))
+                if not text.strip() or control_marker_drop_reason(text):
+                    continue
+                block["text"] = text
+            cleaned_blocks.append(block)
+        return cleaned_blocks
+    if isinstance(content, str):
+        cleaned = strip_leaked_monologue(content)
+        if control_marker_drop_reason(cleaned):
+            return ""
+        return cleaned
+    return content
+
+
+def _assistant_content_is_empty(content: Any) -> bool:
+    if content is None:
+        return True
+    if isinstance(content, str):
+        return not content.strip()
+    if isinstance(content, list):
+        return len(content) == 0
+    return False
+
+
 def _extract_tool_calls(content: Any) -> List[Dict[str, Any]]:
     """
     Extract tool_use blocks from an assistant message content.
@@ -435,13 +468,9 @@ class ConversationStore:
             # 治污：剥掉历史回复里已落库的泄漏独白，否则模型会模仿
             # 自己旧回复的「独白+正文」格式，泄漏自我强化（2026-06-11）
             if role == "assistant":
-                from common.monologue_filter import strip_leaked_monologue
-                if isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
-                            block["text"] = strip_leaked_monologue(block["text"])
-                elif isinstance(content, str) and content:
-                    content = strip_leaked_monologue(content)
+                content = _sanitize_assistant_content(content)
+                if _assistant_content_is_empty(content):
+                    continue
             result.append({"role": role, "content": content})
         return result
 
@@ -496,8 +525,13 @@ class ConversationStore:
 
                     for msg in messages:
                         role = msg.get("role", "")
+                        raw_content = msg.get("content", "")
+                        if role == "assistant":
+                            raw_content = _sanitize_assistant_content(raw_content)
+                            if _assistant_content_is_empty(raw_content):
+                                continue
                         content = json.dumps(
-                            msg.get("content", ""), ensure_ascii=False
+                            raw_content, ensure_ascii=False
                         )
                         extras_obj = msg.get("extras") or {}
                         extras = json.dumps(extras_obj, ensure_ascii=False) if extras_obj else ""

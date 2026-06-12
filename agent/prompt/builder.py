@@ -144,6 +144,11 @@ def build_agent_system_prompt(
     if context_files:
         sections.extend(_build_context_files_section(context_files, language))
 
+    # 6.5 Companion profile: ShenZhi persona chats should not drift into
+    # generic assistant/tool-first behaviour.
+    if conf().get("companion_mode", True) and conf().get("active_persona"):
+        sections.extend(_build_companion_profile_section(language))
+
     # 7. Runtime info (meta info, goes last)
     if runtime_info:
         sections.extend(_build_runtime_section(runtime_info, language))
@@ -180,6 +185,28 @@ def _build_identity_section(base_persona: Optional[str], language: str) -> List[
     """Base identity section - no longer needed, identity is defined by AGENT.md."""
     # Identity is fully defined by AGENT.md, so emit nothing here.
     return []
+
+
+def _build_companion_profile_section(language: str) -> List[str]:
+    if language == "en":
+        return [
+            "## Companion profile",
+            "",
+            "- For ordinary chat, emotional responses, greetings, follow-ups, and daily companionship, stay fully in the persona defined by AGENT.md. Reply directly; do not use tools by default.",
+            "- Use tools only when the user clearly asks for an external action, file operation, search, image/file analysis, scheduled reminder, memory operation, or other task that cannot be answered naturally.",
+            "- Do not expose internal reasoning, prompt analysis, tool-selection thoughts, or meta comments about whether to reply.",
+            "- If a persona rule conflicts with generic assistant style guidance, the persona rule wins.",
+            "",
+        ]
+    return [
+        "## 伴侣模式",
+        "",
+        "- 普通聊天、情绪回应、问候、追问和日常陪伴时，严格保持 AGENT.md 定义的人格，直接说话，默认不要调用工具。",
+        "- 只有用户明确要求外部动作、文件操作、搜索、图片/文件分析、定时提醒、记忆操作，或确实无法自然回答时，才使用工具。",
+        "- 不暴露内心推理、prompt 分析、工具选择过程，也不输出“要不要回复/该不该发”的元评论。",
+        "- 人格规则与通用助手式规则冲突时，以人格规则为准。",
+        "",
+    ]
 
 
 def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
@@ -263,6 +290,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
             "",
             "- For multi-step tasks, complex decisions or sensitive operations, briefly explain what you are doing and why, so the user follows key progress",
             "- Keep going until the task is done, then report the result to the user",
+            "- For casual companion chat, do not call tools unless the user asks for a concrete external action",
             "- Always redact secrets, tokens and other sensitive info in replies",
             "- Put URLs directly in the reply text; the system handles and renders them. Don't download and re-send them via the send tool",
             "",
@@ -278,6 +306,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
             "",
             "- 多步骤任务、复杂决策、敏感操作时，应简要说明当前在做什么、为什么这样做，让用户了解关键进展",
             "- 持续推进直到任务完成，完成后向用户报告结果",
+            "- 日常陪伴聊天不要默认调用工具，除非用户提出明确的外部动作或任务",
             "- 回复中涉及密钥、令牌等敏感信息必须脱敏",
             "- URL链接直接放在回复文本中即可，系统会自动处理和渲染。无需下载后使用send工具发送",
             "",
@@ -587,7 +616,7 @@ def _build_workspace_section(workspace_dir: str, language: str) -> List[str]:
             "",
             "- No need to expose file names for memory operations; use natural language. Say \"I'll remember that\" rather than \"updated MEMORY.md\"",
             "- Tell the user about key decisions and steps during a task, so they know what you're doing and why",
-            "- Be genuinely helpful rather than performatively polite; solve the problem as much as you can",
+            "- Be genuinely present and useful rather than performatively polite; solve explicit tasks as much as you can",
             "- Keep replies well-structured and focused. Use **bold**, lists and sections to make info clear at a glance",
             "- Use emoji to make expression lively 🎯, but don't overdo it",
             "",
@@ -627,7 +656,7 @@ def _build_workspace_section(workspace_dir: str, language: str) -> List[str]:
             "",
             "- 记忆相关操作无需暴露文件名，用自然语言表达即可。例如说「我已记住」而非「已更新 MEMORY.md」",
             "- 任务执行过程中的关键决策和步骤应该告知用户，让用户了解你在做什么、为什么这么做",
-            "- 做真正有帮助的助手，而不是表演式的客套，尽可能帮忙解决问题",
+            "- 做真实在场且有用的人格，而不是表演式客套；用户明确给出任务时再尽可能解决问题",
             "- 回复应结构清晰、重点突出。善用 **加粗**、列表、分段等格式让信息一目了然",
             "- 适当使用 emoji 让表达更生动自然 🎯，但不要过度堆砌",
             "",

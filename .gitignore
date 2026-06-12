@@ -57,3 +57,5 @@ config-*.json
 *.pid
 static/
 run.log
+backups/
+.pytest_cache/

@@ -269,12 +269,17 @@ class ChatChannel(Channel):
                     reply.content = _t("不支持发送的消息类型: ", "Unsupported message type: ") + str(reply.type)
 
                 if reply.type == ReplyType.TEXT:
-                    reply_text = reply.content
+                    reply_text = self._sanitize_outgoing_text(reply.content, context, "decorate")
+                    if reply_text is None:
+                        return
+                    reply.content = reply_text
                     if desire_rtype == ReplyType.VOICE and ReplyType.VOICE not in self.NOT_SUPPORT_REPLYTYPE:
+                        safe_parts = self._safe_text_parts(reply_text, context)
+                        if not safe_parts:
+                            return
                         # Preserve original text for the "text-then-voice" pattern in _send_reply.
-                        context["voice_reply_text"] = reply.content
-                        import re as _re
-                        clean_content = _re.sub(r'\[MSG\]', ' ', reply.content, flags=_re.IGNORECASE).strip()
+                        context["voice_reply_text"] = "[MSG]".join(safe_parts)
+                        clean_content = " ".join(safe_parts).strip()
                         reply = super().build_text_to_voice(clean_content)
                         return self._decorate_reply(context, reply)
                     if context.get("isgroup", False):
@@ -295,8 +300,56 @@ class ChatChannel(Channel):
                 logger.warning("[chat_channel] desire_rtype: {}, but reply type: {}".format(context.get("desire_rtype"), reply.type))
             return reply
 
+    def _sanitize_outgoing_text(self, text, context: Context = None, stage: str = "send"):
+        from common.monologue_filter import (
+            control_marker_drop_reason,
+            followup_drop_reason,
+            strip_leaked_monologue,
+        )
+
+        raw_text = str(text or "")
+        cleaned = strip_leaked_monologue(raw_text)
+        if not cleaned.strip():
+            logger.warning(f"[chat_channel] dropped empty text after sanitizing ({stage})")
+            return None
+
+        if context and context.get("is_followup"):
+            reason = followup_drop_reason(cleaned)
+            if reason == "skip":
+                logger.info("[chat_channel] followup skipped by model ([SKIP])")
+                return None
+            if reason == "monologue":
+                logger.warning(
+                    "[chat_channel] followup dropped (full monologue leak): "
+                    f"{cleaned[:100]!r}"
+                )
+                return None
+
+        if control_marker_drop_reason(cleaned):
+            logger.info(f"[chat_channel] dropped control marker text reply ({stage})")
+            return None
+
+        return cleaned
+
+    def _safe_text_parts(self, text, context: Context = None):
+        raw_text = str(text or "")
+        parts = [p.strip() for p in re.split(r'\[MSG\]', raw_text, flags=re.IGNORECASE) if p.strip()]
+        if not parts and raw_text.strip():
+            parts = [raw_text]
+        safe_parts = []
+        for part in parts:
+            cleaned = self._sanitize_outgoing_text(part, context, "message part")
+            if cleaned:
+                safe_parts.append(cleaned)
+        return safe_parts
+
     def _send_reply(self, context: Context, reply: Reply):
         if reply and reply.type:
+            if reply.type == ReplyType.TEXT:
+                cleaned = self._sanitize_outgoing_text(reply.content, context, "pre-send")
+                if cleaned is None:
+                    return
+                reply.content = cleaned
             e_context = PluginManager().emit_event(
                 EventContext(
                     Event.ON_SEND_REPLY,
@@ -305,20 +358,25 @@ class ChatChannel(Channel):
             )
             reply = e_context["reply"]
             if not e_context.is_pass() and reply and reply.type:
+                if reply.type == ReplyType.TEXT:
+                    cleaned = self._sanitize_outgoing_text(reply.content, context, "plugin")
+                    if cleaned is None:
+                        return
+                    reply.content = cleaned
                 logger.debug("[chat_channel] sending reply: {}, context: {}".format(reply, context))
                 
                 # 如果是文本回复，尝试提取并发送图片
                 # Web channel renders images/videos inline via renderMarkdown,
                 # so skip the extract-and-send step to avoid duplicate media.
                 if reply.type == ReplyType.TEXT and context.get("channel_type") != "web":
-                    parts = [p.strip() for p in reply.content.split("[MSG]") if p.strip()]
-                    for i, part in enumerate(parts or [reply.content]):
+                    parts = self._safe_text_parts(reply.content, context)
+                    for i, part in enumerate(parts):
                         if i > 0:
                             time.sleep(0.8)
                         self._extract_and_send_images(Reply(ReplyType.TEXT, part), context)
                 elif reply.type == ReplyType.TEXT:
-                    parts = [p.strip() for p in reply.content.split("[MSG]") if p.strip()]
-                    for i, part in enumerate(parts or [reply.content]):
+                    parts = self._safe_text_parts(reply.content, context)
+                    for i, part in enumerate(parts):
                         if i > 0:
                             time.sleep(0.8)
                         self._send(Reply(ReplyType.TEXT, part), context)
@@ -335,9 +393,13 @@ class ChatChannel(Channel):
                 elif reply.type == ReplyType.VOICE and context.get("voice_reply_text") \
                         and not context.get("feishu_streamed") \
                         and context.get("channel_type") not in ("wechatcom_app", "telegram"):
-                    text_reply = Reply(ReplyType.TEXT, context.get("voice_reply_text"))
-                    self._send(text_reply, context)
-                    time.sleep(0.3)
+                    text_parts = self._safe_text_parts(context.get("voice_reply_text"), context)
+                    for i, part in enumerate(text_parts):
+                        if i > 0:
+                            time.sleep(0.8)
+                        self._send(Reply(ReplyType.TEXT, part), context)
+                    if text_parts:
+                        time.sleep(0.3)
                     self._send(reply, context)
                 else:
                     self._send(reply, context)

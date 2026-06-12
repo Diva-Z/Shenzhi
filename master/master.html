@@ -40,7 +40,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .modal h3{margin-bottom:16px;font-size:17px}
 .modal .row{display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap}
 .modal label{display:block;font-size:12.5px;color:var(--dim);margin-bottom:5px}
-.modal input[type=text],.modal input[type=number],.modal textarea,.modal select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;font-family:inherit}
+.modal input[type=text],.modal input[type=password],.modal input[type=number],.modal textarea,.modal select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;font-family:inherit}
 .modal textarea{resize:vertical;line-height:1.6}
 .modal textarea.md{font-family:Consolas,monospace;font-size:12.5px}
 .f1{flex:1;min-width:150px}
@@ -87,19 +87,23 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
         </div>
       </div>
     </div>
+    <div class="row">
+      <div class="f1"><label>从模板开始（可选）</label><select id="c-template" onchange="templateChange()"><option value="">空白人格</option></select></div>
+    </div>
     <div class="row" id="c-tg-row" style="display:none">
-      <div class="f1"><label>Telegram bot token（@BotFather 创建，每个人格一个独立 bot）</label><input type="text" id="c-tg-token" placeholder="123456:ABC-..."></div>
+      <div class="f1"><label>Telegram bot token（@BotFather 创建，每个人格一个独立 bot）</label><input type="password" id="c-tg-token" placeholder="123456:ABC-..."></div>
     </div>
     <div class="row">
       <div class="f1"><label>追问等待 · 最小（分钟）</label><input type="number" id="c-fmin" value="180"></div>
       <div class="f1"><label>追问等待 · 最大（分钟）</label><input type="number" id="c-fmax" value="240"></div>
+      <div class="f1"><label>追问次数上限（0 = 不限）</label><input type="number" id="c-fcount" value="0" min="0"></div>
     </div>
     <div class="row">
       <div class="f1"><label>模型厂商（留空 = 继承默认配置）</label><select id="c-mprov" onchange="provChange('c')"><option value="">继承默认配置</option></select></div>
       <div class="f1"><label>模型名</label><input type="text" id="c-mname" placeholder="先选厂商"></div>
     </div>
     <div class="row" id="c-mapi-row" style="display:none">
-      <div class="f1"><label id="c-mkey-label">API Key（留空 = 用默认配置里的 key）</label><input type="text" id="c-mkey" placeholder="sk-..."></div>
+      <div class="f1"><label id="c-mkey-label">API Key（留空 = 用默认配置里的 key）</label><input type="password" id="c-mkey" placeholder="sk-..."></div>
       <div class="f1" id="c-mbase-box"><label>API Base（可选，留空用官方地址）</label><input type="text" id="c-mbase" placeholder="https://..."></div>
     </div>
     <div class="row">
@@ -164,6 +168,7 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
       </div>
       <div class="f1"><label>首次追问 · 最小（分钟）</label><input type="number" id="e-fmin"></div>
       <div class="f1"><label>首次追问 · 最大（分钟）</label><input type="number" id="e-fmax"></div>
+      <div class="f1"><label>追问次数上限（0 = 不限）</label><input type="number" id="e-fcount" min="0"></div>
     </div>
     <div class="row">
       <div class="f1"><label>再次追问 · 最小（分钟）</label><input type="number" id="e-rmin"></div>
@@ -174,7 +179,7 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
       <div class="f1"><label>模型名</label><input type="text" id="e-mname" placeholder="不修改请留空"></div>
     </div>
     <div class="row" id="e-mapi-row" style="display:none">
-      <div class="f1"><label id="e-mkey-label">API Key（留空 = 不修改）</label><input type="text" id="e-mkey" placeholder="不修改请留空"></div>
+      <div class="f1"><label id="e-mkey-label">API Key（留空 = 不修改）</label><input type="password" id="e-mkey" placeholder="不修改请留空"></div>
       <div class="f1" id="e-mbase-box"><label>API Base（留空 = 不修改）</label><input type="text" id="e-mbase" placeholder="https://..."></div>
     </div>
     <div class="row">
@@ -187,7 +192,7 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
       <div class="f1"><label>图像生成厂商</label><select id="e-imgp"><option value="">不修改</option></select></div>
       <div class="f1"><label id="e-imgm-label">图像生成模型</label><input type="text" id="e-imgm" placeholder="不修改请留空"></div>
     </div>
-    <div class="row"><div class="f1"><label>Telegram bot token（留空 = 不修改）</label><input type="text" id="e-tg-token" placeholder="不修改请留空"></div></div>
+    <div class="row"><div class="f1"><label>Telegram bot token（留空 = 不修改）</label><input type="password" id="e-tg-token" placeholder="不修改请留空"></div></div>
     <div class="row"><div class="f1"><label>AGENT.md（AI 人设）</label><textarea id="e-agent" class="md" rows="16"></textarea></div></div>
     <div class="row"><div class="f1"><label>USER.md（用户设定）</label><textarea id="e-user" class="md" rows="9"></textarea></div></div>
     <p class="hint">人设与配置改动需重启实例后生效（约 10 秒，仅影响该人格）。</p>
@@ -195,6 +200,25 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
       <button onclick="hide('m-edit')">取消</button>
       <button onclick="submitEdit(false)">仅保存</button>
       <button class="primary" onclick="submitEdit(true)">保存并重启</button>
+    </div>
+  </div>
+</div>
+
+<!-- 清除记忆 -->
+<div class="mask" id="m-clear">
+  <div class="modal" style="width:560px">
+    <h3 id="clear-title">清除记忆</h3>
+    <p class="hint">会先自动 zip 备份。实例运行中不能清除；清除后需要重新启动该人格。</p>
+    <div class="checks" style="display:block;line-height:2.1;margin:12px 0">
+      <label><input type="checkbox" id="cl-conv" checked> 短期对话历史（sessions/messages）</label><br>
+      <label><input type="checkbox" id="cl-diary" checked> 日记与向量/关键词索引（daily/dream/chunks/files）</label><br>
+      <label><input type="checkbox" id="cl-follow" checked> 追问状态（followup_state）</label><br>
+      <label><input type="checkbox" id="cl-long"> 长期记忆 MEMORY.md</label>
+    </div>
+    <div class="row"><div class="f1"><label id="cl-confirm-label">输入人格 ID 确认</label><input type="text" id="cl-confirm"></div></div>
+    <div class="foot">
+      <button onclick="hide('m-clear')">取消</button>
+      <button class="danger" onclick="submitClearMemory()">清除所选记忆</button>
     </div>
   </div>
 </div>
@@ -220,14 +244,25 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
 <div id="toast"></div>
 <script>
 let state = {personas: []};
-let qrTimer = null, editId = null;
+let qrTimer = null, editId = null, clearId = null;
 
 const $ = id => document.getElementById(id);
+const urlToken = new URLSearchParams(location.search).get('token') || '';
+if(urlToken) localStorage.setItem('shenzhi_master_token', urlToken);
+const masterToken = () => localStorage.getItem('shenzhi_master_token') || '';
+const authHeaders = extra => {
+  const h = Object.assign({}, extra || {});
+  const token = masterToken();
+  if(token) h['X-ShenZhi-Master-Token'] = token;
+  return h;
+};
 function show(id){ $(id).classList.add('show'); }
 function hide(id){ $(id).classList.remove('show'); }
 function toast(msg, ms=3200){ const t=$('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none', ms); }
 
 async function api(path, opt){
+  opt = opt || {};
+  opt.headers = authHeaders(Object.assign({'Content-Type':'application/json'}, opt.headers || {}));
   const r = await fetch(path, opt);
   let d = {};
   try { d = await r.json(); } catch(e){}
@@ -301,6 +336,46 @@ function mediaFields(prefix){
   return out;
 }
 
+function fillTemplateSelect(){
+  const sel = $('c-template');
+  if(!sel) return;
+  const keep = sel.value;
+  sel.length = 1;
+  for(const t of (state.persona_templates || [])){
+    const label = t.type === 'copy' ? t.title : `${t.title} · ${t.description || ''}`;
+    sel.add(new Option(label, t.id));
+  }
+  sel.value = keep;
+}
+
+function setEmoji(v){
+  const el = document.querySelector(`input[name=emoji][value="${v || 'few'}"]`);
+  if(el) el.checked = true;
+}
+
+async function templateChange(){
+  const id = $('c-template').value;
+  const t = (state.persona_templates || []).find(x=>x.id===id);
+  if(!t) return;
+  if(t.type === 'builtin'){
+    const f = t.form || {};
+    if(f.relationship) $('c-rel').value = f.relationship;
+    if(f.background) $('c-bg').value = f.background;
+    if(f.personality) $('c-pers').value = f.personality;
+    if(f.style) $('c-style').value = f.style;
+    if(f.few_shot) $('c-few').value = f.few_shot;
+    if(f.user_profile) $('c-uprof').value = f.user_profile;
+    if(f.user_rules) $('c-urule').value = f.user_rules;
+    setEmoji(f.emoji_level);
+    setTab('form');
+  } else if(t.type === 'copy' && t.persona_id){
+    const d = await api(`/api/persona/${t.persona_id}`);
+    $('c-agent').value = d.agent_md || '';
+    $('c-userm').value = d.user_md || '';
+    setTab('raw');
+  }
+}
+
 function render(){
   $('run-count').textContent = state.running;
   $('max-count').textContent = state.max_running;
@@ -313,6 +388,7 @@ function render(){
       const first = rng(p.followup_first_sec);
       const rep = p.followup_repeat_sec ? rng(p.followup_repeat_sec) : first;
       fu = rep === first ? `${first} 分钟` : `首次 ${first} / 再次 ${rep} 分钟`;
+      if(p.followup_max_count) fu += ` / 最多 ${p.followup_max_count} 次`;
     }
     let warn = '';
     if(p.channels.includes('weixin') && p.weixin_logged_in === false) warn += `<span class="tag hl">微信未登录</span>`;
@@ -328,7 +404,7 @@ function render(){
         <div class="top"><span class="dot ${p.running?'on':''}"></span><h3>${p.title}</h3><span class="id">${p.id}${p.is_default?' · 默认实例':''}</span></div>
         <div>${chans}${warn}</div>
         <div class="meta">模型：${p.model||'默认'}　追问间隔：${fu}　${p.running?('PID '+p.pid):'未运行'}</div>
-        <div class="btns">${runBtns}<button onclick="openEdit('${p.id}')">编辑</button>${consoleBtn}${qrBtn}<button onclick="openLog('${p.id}')">日志</button></div>
+        <div class="btns">${runBtns}<button onclick="openEdit('${p.id}')">编辑</button><button class="danger" onclick="openClearMemory('${p.id}')">清记忆</button>${consoleBtn}${qrBtn}<button onclick="openLog('${p.id}')">日志</button></div>
       </div>`);
   }
 }
@@ -338,6 +414,7 @@ async function refresh(){
     state = await api('/api/overview'); render();
     fillProviderSelect('c'); fillProviderSelect('e');
     fillMediaSelects('c'); fillMediaSelects('e');
+    fillTemplateSelect();
   } catch(e){ toast('刷新失败：' + e.message); }
 }
 
@@ -360,7 +437,7 @@ async function bulk(action){
 }
 
 /* 新建 */
-function openCreate(){ show('m-create'); }
+function openCreate(){ fillTemplateSelect(); show('m-create'); }
 function setTab(t){
   $('tab-form').classList.toggle('on', t==='form');
   $('tab-raw').classList.toggle('on', t==='raw');
@@ -379,10 +456,13 @@ async function submitCreate(){
     id: $('c-id').value.trim(), channels: chans('c'),
     telegram_token: $('c-tg-token').value.trim(),
     followup_min: +$('c-fmin').value||180, followup_max: +$('c-fmax').value||240,
+    followup_max_count: Math.max(0, +$('c-fcount').value||0),
+    template_id: $('c-template').value,
     mode,
     ...modelFields('c'),
     ...mediaFields('c'),
   };
+  if(($('c-template').value || '').startsWith('copy:')) body.copy_from = $('c-template').value.split(':')[1];
   if(mode==='raw'){ body.agent_md=$('c-agent').value; body.user_md=$('c-userm').value; }
   else body.form = {
     bot_name:$('c-bot').value.trim(), user_name:$('c-user').value.trim(),
@@ -409,6 +489,7 @@ async function openEdit(id){
     $('e-fmax').value = d.followup_first_sec ? Math.round(d.followup_first_sec[1]/60) : '';
     $('e-rmin').value = d.followup_repeat_sec ? Math.round(d.followup_repeat_sec[0]/60) : '';
     $('e-rmax').value = d.followup_repeat_sec ? Math.round(d.followup_repeat_sec[1]/60) : '';
+    $('e-fcount').value = d.followup_max_count || 0;
     $('e-tg-token').value = '';
     editProviders = d.model_providers || [];
     $('e-mprov').value = providers().some(x=>x.id===d.bot_type) ? d.bot_type : '';
@@ -437,6 +518,7 @@ async function submitEdit(restart){
     channels: chans('e'), telegram_token: $('e-tg-token').value.trim(),
     followup_min: +$('e-fmin').value||0, followup_max: +$('e-fmax').value||0,
     followup_repeat_min: +$('e-rmin').value||0, followup_repeat_max: +$('e-rmax').value||0,
+    followup_max_count: Math.max(0, +$('e-fcount').value||0),
     ...modelFields('e'),
     ...mediaFields('e'),
     restart,
@@ -448,20 +530,51 @@ async function submitEdit(restart){
   } catch(e){ toast(e.message, 6000); }
 }
 
+/* 清除记忆 */
+function openClearMemory(id){
+  clearId = id;
+  $('clear-title').textContent = `清除记忆：${id}`;
+  $('cl-confirm-label').textContent = `输入人格 ID「${id}」确认`;
+  $('cl-confirm').value = '';
+  $('cl-conv').checked = true;
+  $('cl-diary').checked = true;
+  $('cl-follow').checked = true;
+  $('cl-long').checked = false;
+  show('m-clear');
+}
+
+async function submitClearMemory(){
+  if(!clearId) return;
+  const body = {
+    confirm: $('cl-confirm').value.trim(),
+    conversation: $('cl-conv').checked,
+    diary_vector: $('cl-diary').checked,
+    followup_state: $('cl-follow').checked,
+    long_term: $('cl-long').checked,
+  };
+  toast('正在备份并清除记忆…', 15000);
+  try {
+    const d = await api(`/api/persona/${clearId}/memory/clear`, {method:'POST', body: JSON.stringify(body)});
+    hide('m-clear');
+    toast(`已清除：${d.message}；备份：${d.backup}`, 10000);
+    refresh();
+  } catch(e){ toast(e.message, 8000); }
+}
+
 /* 二维码 */
 const QR_HINT_DEFAULT = '用目标用户本人的微信扫码（bot 与第一个扫码号永久绑定）。<br>二维码每 2 分钟自动换新，本窗口每 20 秒自动刷新。';
 function qrHint(html){ $('qr-hint').innerHTML = html; }
 
 async function loadQr(id, allowRevive){
-  let r = await fetch(`/api/qr/${id}?t=${Date.now()}`);
+  let r = await fetch(`/api/qr/${id}?t=${Date.now()}`, {headers: authHeaders()});
   if (r.status === 410 && allowRevive){
     // 登录窗口已超时：重启实例拉新码（即点即扫）
     qrHint('⏳ 二维码已过期，正在重启实例获取新码（约半分钟，请勿关闭窗口）…');
     $('qr-img').style.visibility = 'hidden';
-    const rr = await fetch(`/api/qr/${id}/refresh`, {method:'POST'});
+    const rr = await fetch(`/api/qr/${id}/refresh`, {method:'POST', headers: authHeaders()});
     const j = await rr.json().catch(()=>({}));
     if (!j.ok){ qrHint('❌ ' + (j.error || '获取新码失败，请查看日志')); return; }
-    r = await fetch(`/api/qr/${id}?t=${Date.now()}`);
+    r = await fetch(`/api/qr/${id}?t=${Date.now()}`, {headers: authHeaders()});
   }
   if (r.ok && (r.headers.get('Content-Type')||'').includes('image')){
     const blob = await r.blob();

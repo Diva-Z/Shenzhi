@@ -115,7 +115,14 @@ class AgentEventHandler:
 
     def _do_send(self, message):
         try:
+            from common.monologue_filter import control_marker_drop_reason, strip_leaked_monologue
             from bridge.reply import Reply, ReplyType
+            message = strip_leaked_monologue(str(message or ""))
+            if not message.strip():
+                return
+            if control_marker_drop_reason(message):
+                logger.info("[AgentEventHandler] dropped control marker interim message")
+                return
             reply = Reply(ReplyType.TEXT, message)
             self.channel._send(reply, self.context)
         except Exception as e:

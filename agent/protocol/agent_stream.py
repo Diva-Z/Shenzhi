@@ -785,6 +785,7 @@ class AgentStreamExecutor:
 
         # Streaming response
         full_content = ""
+        visible_content = ""  # Text already emitted to streaming clients after sanitizing.
         full_reasoning = ""
         tool_calls_buffer = {}  # {index: {id, name, arguments}}
         gemini_raw_parts = None  # Preserve Gemini thoughtSignature for round-trip
@@ -806,14 +807,16 @@ class AgentStreamExecutor:
                         # Persist partial text only; tool_use args may be
                         # truncated mid-stream and would fail validation.
                         logger.info("[Agent] cancel detected mid-stream, aborting LLM call")
-                        if full_content:
+                        from common.monologue_filter import strip_leaked_monologue
+                        safe_partial = strip_leaked_monologue(full_content)
+                        if safe_partial:
                             partial_msg = {
                                 "role": "assistant",
-                                "content": [{"type": "text", "text": full_content}],
+                                "content": [{"type": "text", "text": safe_partial}],
                             }
                             self.messages.append(partial_msg)
                         self._emit_event("message_end", {
-                            "content": full_content,
+                            "content": safe_partial,
                             "tool_calls": [],
                             "cancelled": True,
                         })
@@ -880,8 +883,17 @@ class AgentStreamExecutor:
                         # Filter out <think> tags from content
                         filtered_delta = self._filter_think_tags(content_delta)
                         full_content += filtered_delta
-                        if filtered_delta:  # Only emit if there's content after filtering
-                            self._emit_event("message_update", {"delta": filtered_delta})
+                        if filtered_delta:  # Only emit text that survives the streaming sanitizer.
+                            from common.monologue_filter import sanitize_streaming_assistant_text
+                            safe_visible = sanitize_streaming_assistant_text(full_content)
+                            if safe_visible and safe_visible.startswith(visible_content):
+                                visible_delta = safe_visible[len(visible_content):]
+                                if visible_delta:
+                                    self._emit_event("message_update", {"delta": visible_delta})
+                                    visible_content = safe_visible
+                            elif safe_visible and not visible_content:
+                                self._emit_event("message_update", {"delta": safe_visible})
+                                visible_content = safe_visible
 
                     # Handle tool calls
                     if "tool_calls" in delta and delta["tool_calls"]:
@@ -1072,8 +1084,18 @@ class AgentStreamExecutor:
 
         # mimo-v2.5 在 thinking 关闭时会间歇性把推理独白写进 content 开头，
         # 必须在入历史/发送前剥掉，否则模型会模仿历史里的独白格式自我强化
-        from common.monologue_filter import strip_leaked_monologue
+        from common.monologue_filter import control_marker_drop_reason, strip_leaked_monologue
         full_content = strip_leaked_monologue(full_content)
+
+        drop_control_content = bool(control_marker_drop_reason(full_content))
+        if drop_control_content:
+            logger.info("[Agent] dropped control marker assistant text from history ([SKIP])")
+
+        if full_content and not drop_control_content and full_content.startswith(visible_content):
+            visible_delta = full_content[len(visible_content):]
+            if visible_delta:
+                self._emit_event("message_update", {"delta": visible_delta})
+                visible_content = full_content
         
         # Add assistant message to history (Claude format uses content blocks)
         assistant_msg = {"role": "assistant", "content": []}
@@ -1090,7 +1112,7 @@ class AgentStreamExecutor:
                 "thinking": stored_reasoning
             })
 
-        if full_content:
+        if full_content and not drop_control_content:
             assistant_msg["content"].append({
                 "type": "text",
                 "text": full_content
@@ -1114,7 +1136,7 @@ class AgentStreamExecutor:
             self.messages.append(assistant_msg)
 
         self._emit_event("message_end", {
-            "content": full_content,
+            "content": "" if drop_control_content else full_content,
             "tool_calls": tool_calls
         })
 

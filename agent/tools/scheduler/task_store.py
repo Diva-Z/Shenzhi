@@ -4,7 +4,10 @@ Task storage management for scheduler
 
 import json
 import os
+import shutil
 import threading
+import time
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Dict, List, Optional
 from pathlib import Path
@@ -31,12 +34,82 @@ class TaskStore:
         self.store_path = store_path
         self.lock = threading.Lock()
         self._ensure_store_dir()
+
+    @contextmanager
+    def _file_lock(self):
+        """Cross-process lock guarding tasks.json read-modify-write."""
+        lock_path = f"{self.store_path}.lock"
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+        with open(lock_path, "a+", encoding="utf-8") as lock_file:
+            if os.name == "nt":
+                import msvcrt
+                locked = False
+                for _ in range(100):
+                    try:
+                        lock_file.seek(0)
+                        if not lock_file.read(1):
+                            lock_file.write("0")
+                            lock_file.flush()
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                        locked = True
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+                if not locked:
+                    raise TimeoutError(f"Timeout waiting for scheduler lock: {lock_path}")
+                try:
+                    yield
+                finally:
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     
     def _ensure_store_dir(self):
         """Ensure the storage directory exists"""
         store_dir = os.path.dirname(self.store_path)
         os.makedirs(store_dir, exist_ok=True)
     
+    def _load_tasks_unlocked(self) -> Dict[str, dict]:
+        if not os.path.exists(self.store_path):
+            return {}
+        try:
+            with open(self.store_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get("tasks", {})
+        except Exception as e:
+            print(f"Error loading tasks: {e}")
+            return {}
+
+    def _save_tasks_unlocked(self, tasks: Dict[str, dict]):
+        try:
+            if os.path.exists(self.store_path):
+                backup_path = f"{self.store_path}.bak"
+                try:
+                    shutil.copyfile(self.store_path, backup_path)
+                except Exception:
+                    pass
+
+            data = {
+                "version": 1,
+                "updated_at": datetime.now().isoformat(),
+                "tasks": tasks
+            }
+
+            tmp_path = f"{self.store_path}.{os.getpid()}.tmp"
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, self.store_path)
+        except Exception as e:
+            print(f"Error saving tasks: {e}")
+            raise
+
     def load_tasks(self) -> Dict[str, dict]:
         """
         Load all tasks from storage
@@ -45,16 +118,8 @@ class TaskStore:
             Dictionary of task_id -> task_data
         """
         with self.lock:
-            if not os.path.exists(self.store_path):
-                return {}
-            
-            try:
-                with open(self.store_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    return data.get("tasks", {})
-            except Exception as e:
-                print(f"Error loading tasks: {e}")
-                return {}
+            with self._file_lock():
+                return self._load_tasks_unlocked()
     
     def save_tasks(self, tasks: Dict[str, dict]):
         """
@@ -64,29 +129,8 @@ class TaskStore:
             tasks: Dictionary of task_id -> task_data
         """
         with self.lock:
-            try:
-                # Create backup
-                if os.path.exists(self.store_path):
-                    backup_path = f"{self.store_path}.bak"
-                    try:
-                        with open(self.store_path, 'r') as src:
-                            with open(backup_path, 'w') as dst:
-                                dst.write(src.read())
-                    except Exception:
-                        pass
-                
-                # Save tasks
-                data = {
-                    "version": 1,
-                    "updated_at": datetime.now().isoformat(),
-                    "tasks": tasks
-                }
-                
-                with open(self.store_path, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                print(f"Error saving tasks: {e}")
-                raise
+            with self._file_lock():
+                self._save_tasks_unlocked(tasks)
     
     def add_task(self, task: dict) -> bool:
         """
@@ -98,17 +142,19 @@ class TaskStore:
         Returns:
             True if successful
         """
-        tasks = self.load_tasks()
-        task_id = task.get("id")
-        
-        if not task_id:
-            raise ValueError("Task must have an 'id' field")
-        
-        if task_id in tasks:
-            raise ValueError(f"Task with id '{task_id}' already exists")
-        
-        tasks[task_id] = task
-        self.save_tasks(tasks)
+        with self.lock:
+            with self._file_lock():
+                tasks = self._load_tasks_unlocked()
+                task_id = task.get("id")
+                
+                if not task_id:
+                    raise ValueError("Task must have an 'id' field")
+                
+                if task_id in tasks:
+                    raise ValueError(f"Task with id '{task_id}' already exists")
+                
+                tasks[task_id] = task
+                self._save_tasks_unlocked(tasks)
         return True
     
     def update_task(self, task_id: str, updates: dict) -> bool:
@@ -122,16 +168,18 @@ class TaskStore:
         Returns:
             True if successful
         """
-        tasks = self.load_tasks()
-        
-        if task_id not in tasks:
-            raise ValueError(f"Task '{task_id}' not found")
-        
-        # Update fields
-        tasks[task_id].update(updates)
-        tasks[task_id]["updated_at"] = datetime.now().isoformat()
-        
-        self.save_tasks(tasks)
+        with self.lock:
+            with self._file_lock():
+                tasks = self._load_tasks_unlocked()
+                
+                if task_id not in tasks:
+                    raise ValueError(f"Task '{task_id}' not found")
+                
+                # Update fields
+                tasks[task_id].update(updates)
+                tasks[task_id]["updated_at"] = datetime.now().isoformat()
+                
+                self._save_tasks_unlocked(tasks)
         return True
     
     def delete_task(self, task_id: str) -> bool:
@@ -144,13 +192,15 @@ class TaskStore:
         Returns:
             True if successful
         """
-        tasks = self.load_tasks()
-        
-        if task_id not in tasks:
-            raise ValueError(f"Task '{task_id}' not found")
-        
-        del tasks[task_id]
-        self.save_tasks(tasks)
+        with self.lock:
+            with self._file_lock():
+                tasks = self._load_tasks_unlocked()
+                
+                if task_id not in tasks:
+                    raise ValueError(f"Task '{task_id}' not found")
+                
+                del tasks[task_id]
+                self._save_tasks_unlocked(tasks)
         return True
     
     def get_task(self, task_id: str) -> Optional[dict]:

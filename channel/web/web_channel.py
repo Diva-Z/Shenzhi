@@ -494,6 +494,16 @@ class WebChannel(ChatChannel):
                 # would hang until the 10-min idle timeout. Push a fallback "done"
                 # here so the frontend always gets closure.
                 final_response = data.get("final_response", "")
+                from common.monologue_filter import control_marker_drop_reason
+                if control_marker_drop_reason(str(final_response or "")):
+                    logger.info(f"[WebChannel] agent_end skipped control marker for request {request_id}")
+                    q.put({
+                        "type": "done",
+                        "content": "",
+                        "request_id": request_id,
+                        "timestamp": time.time(),
+                    })
+                    return
                 if not final_response or not str(final_response).strip():
                     if streamed_error:
                         # Error was already surfaced via the `error` event
@@ -1191,32 +1201,6 @@ class WebChannel(ChatChannel):
             s.requests.max = 80
             return s
 
-        def _free_port():
-            try:
-                import subprocess, os as _os
-                ps_cmd = (
-                    f"(Get-NetTCPConnection -LocalPort {port} -State Listen "
-                    f"-ErrorAction SilentlyContinue).OwningProcess"
-                )
-                result = subprocess.run(
-                    ["powershell", "-NonInteractive", "-Command", ps_cmd],
-                    capture_output=True, text=True, timeout=8
-                )
-                pid_str = (result.stdout or "").strip()
-                # PowerShell may return multiple lines if multiple sockets
-                for line in pid_str.splitlines():
-                    line = line.strip()
-                    if line.isdigit() and int(line) != _os.getpid():
-                        subprocess.run(
-                            ["taskkill", "/F", "/PID", line],
-                            capture_output=True, timeout=5
-                        )
-                        logger.info(f"[WebChannel] Killed PID {line} holding port {port}")
-                return True
-            except Exception as kill_err:
-                logger.warning(f"[WebChannel] Port cleanup error: {kill_err}")
-                return False
-
         try:
             server.start()
         except (KeyboardInterrupt, SystemExit):
@@ -1224,22 +1208,12 @@ class WebChannel(ChatChannel):
         except OSError as e:
             # errno 48/98 = macOS/Linux EADDRINUSE; 10048 = Windows
             if e.errno in (48, 98, 10048) or "10048" in str(e):
-                logger.warning(f"[WebChannel] Port {port} in use, trying to free it...")
-                _free_port()
-                import time as _time
-                _time.sleep(3)  # give Windows time to fully release the socket
-                # Recreate server object to avoid stale socket state from failed prepare()
-                server = _make_server()
-                self._http_server = server
-                try:
-                    server.start()
-                    return
-                except OSError:
-                    logger.error(
-                        f"[WebChannel] Port {port} still in use after cleanup. "
-                        f"Web UI unavailable this session — Telegram still works normally."
-                    )
-                    return  # don't raise; Telegram channel continues fine
+                logger.error(
+                    f"[WebChannel] Port {port} is already in use. "
+                    "Web UI unavailable this session; change web_port in this instance config "
+                    "or stop the process using that port."
+                )
+                return  # don't raise; Telegram/Weixin channels continue fine
             raise
 
     def stop(self):
@@ -4071,7 +4045,8 @@ class LogsHandler:
         web.header('X-Accel-Buffering', 'no')
 
         from config import get_root
-        log_path = os.path.join(get_root(), "run.log")
+        from common.log import _log_file_name
+        log_path = os.path.join(get_root(), _log_file_name())
 
         def generate():
             if not os.path.isfile(log_path):

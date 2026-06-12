@@ -1,4 +1,4 @@
-"""cow start/stop/restart/status/logs - Process management commands."""
+"""shenzhi start/stop/restart/status/logs - Process management commands."""
 
 import json
 import os
@@ -172,6 +172,7 @@ def start(foreground, no_logs, instance):
             click.echo(f"Error: config file '{config_file}' not found for instance '{instance}'.", err=True)
             sys.exit(1)
         child_env["SHENZHI_CONFIG"] = config_path
+        child_env["SHENZHI_INSTANCE"] = instance
 
     python = sys.executable
 
@@ -279,21 +280,21 @@ def update(ctx):
     req_file = os.path.join(root, "requirements.txt")
 
     if _IS_WIN:
-        # On Windows, `cow.exe` (this process) locks the exe file, so
+        # On Windows, `shenzhi.exe` (this process) locks the exe file, so
         # `pip install -e .` fails with WinError 5.  Write a small .bat
-        # helper that waits for cow.exe to exit, then installs & starts.
-        bat = os.path.join(root, "_cow_update.bat")
+        # helper that waits for shenzhi.exe to exit, then installs & starts.
+        bat = os.path.join(root, "_shenzhi_update.bat")
         lines = [
             "@echo off",
             "chcp 65001 >nul",
-            "echo Waiting for cow.exe to exit...",
+            "echo Waiting for shenzhi.exe to exit...",
             "timeout /t 3 /nobreak >nul",
         ]
         if os.path.exists(req_file):
             lines.append(f'echo Installing dependencies...')
             lines.append(f'"{python}" -m pip install -r requirements.txt -q')
         lines += [
-            "echo Reinstalling cow CLI...",
+            "echo Reinstalling ShenZhi CLI...",
             f'"{python}" -m pip install -e . -q',
             "echo Starting ShenZhi...",
             f'"{python}" -m cli.cli start --no-logs',
@@ -320,7 +321,7 @@ def update(ctx):
                 [python, "-m", "pip", "install", "-r", "requirements.txt", "-q"],
                 cwd=root,
             )
-        click.echo("Reinstalling cow CLI...")
+        click.echo("Reinstalling ShenZhi CLI...")
         subprocess.call(
             [python, "-m", "pip", "install", "-e", ".", "-q"],
             cwd=root,
@@ -341,7 +342,7 @@ def status(instance):
 
     # get_cli_language() calls ensure_sys_path(), which adds the project root
     # to sys.path. Import `common` only AFTER that, otherwise it fails with
-    # ModuleNotFoundError when `cow` runs from outside the project dir.
+    # ModuleNotFoundError when `shenzhi` runs from outside the project dir.
     get_cli_language()  # resolve cow_lang so i18n.t reflects config
     from common import i18n
     _t = i18n.t
@@ -355,7 +356,7 @@ def status(instance):
 
     click.echo(_t(f"  版本: v{__version__}", f"  Version: v{__version__}"))
 
-    # Project path bound to this `cow` CLI — disambiguates which checkout the
+    # Project path bound to this `shenzhi` CLI — disambiguates which checkout the
     # command actually controls when the user has multiple clones.
     project_root = get_project_root()
     click.echo(_t(f"  路径: {project_root}", f"  Path: {project_root}"))

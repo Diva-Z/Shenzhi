@@ -13,13 +13,19 @@ Run: `shenzhi master` (or `python -m master` from the project root).
 """
 
 import io
+import datetime
+import hmac
 import json
 import os
 import re
+import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
+import zipfile
+from urllib.parse import parse_qs
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
@@ -208,6 +214,42 @@ def _base_config():
     return _load_json(os.path.join(PROJECT_ROOT, "config.json"))
 
 
+def _master_token():
+    return (
+        os.environ.get("SHENZHI_MASTER_TOKEN", "").strip()
+        or (_base_config().get("master_token") or "").strip()
+        or (_base_config().get("master_password") or "").strip()
+    )
+
+
+def _authorized():
+    token = _master_token()
+    if not token:
+        return True
+    query_token = ""
+    try:
+        query_token = (parse_qs((web.ctx.query or "").lstrip("?")).get("token") or [""])[0]
+    except Exception:
+        query_token = ""
+    supplied = (
+        web.ctx.env.get("HTTP_X_SHENZHI_MASTER_TOKEN", "")
+        or query_token
+        or web.cookies().get("shenzhi_master_token", "")
+    )
+    ok = hmac.compare_digest(str(supplied), token)
+    if ok and supplied:
+        web.setcookie("shenzhi_master_token", supplied, path="/", httponly=True, samesite="Lax")
+    return ok
+
+
+def _auth_processor(handler):
+    if _authorized():
+        return handler()
+    web.ctx.status = "401 Unauthorized"
+    web.header("Content-Type", "text/plain; charset=utf-8")
+    return "Unauthorized"
+
+
 def _workspace_root():
     ws = _base_config().get("agent_workspace", "~/cow")
     return os.path.expanduser(ws)
@@ -327,6 +369,7 @@ def _persona_info(name):
         "web_console": bool(cfg.get("web_console", True)) if cfg else False,
         "followup_first_sec": cfg.get("followup_first_sec"),
         "followup_repeat_sec": cfg.get("followup_repeat_sec"),
+        "followup_max_count": cfg.get("followup_max_count"),
         "telegram_token_set": bool(cfg.get("telegram_token")),
         "weixin_logged_in": _weixin_logged_in(cfg) if "weixin" in channels else None,
         "weixin_qr_available": False,
@@ -401,6 +444,77 @@ _EMOJI_RULES = {
     "normal": "适度使用 emoji 表达情绪，自然就好，不刻意",
     "many": "大量使用 emoji 和颜文字表达情绪，开心、撒娇、生气都配上对应表情，情绪越强表情越多",
 }
+
+BUILTIN_PERSONA_TEMPLATES = [
+    {
+        "id": "lover",
+        "title": "恋人",
+        "description": "亲密、自然、偏日常陪伴",
+        "form": {
+            "relationship": "恋人",
+            "personality": "- 亲近但不黏人\n- 会撒娇，也会认真听他说话\n- 记得两个人的小习惯",
+            "style": "短句，像微信聊天\n会自然接住情绪，不讲大道理\n偶尔用亲昵称呼",
+            "emoji_level": "few",
+        },
+    },
+    {
+        "id": "childhood-friend",
+        "title": "青梅竹马",
+        "description": "熟人感强，会打趣，有共同过去",
+        "form": {
+            "relationship": "青梅竹马",
+            "personality": "- 嘴上会损他，心里很在意\n- 熟悉他的生活习惯\n- 不端着，说话有熟人感",
+            "style": "可以吐槽，但不刻薄\n称呼自然，不客套\n回复短一点，像随手发消息",
+            "emoji_level": "few",
+        },
+    },
+    {
+        "id": "close-friend",
+        "title": "挚友",
+        "description": "稳定、直白、能一起扛事",
+        "form": {
+            "relationship": "挚友",
+            "personality": "- 可靠，话不多但在场\n- 直白，不绕弯\n- 需要时会提醒他休息和吃饭",
+            "style": "语气平实，不油腻\n少用感叹号\n不做帮助清单，先回应他的状态",
+            "emoji_level": "none",
+        },
+    },
+    {
+        "id": "assistant-companion",
+        "title": "生活助理",
+        "description": "保留人格感，但偏提醒和事务协助",
+        "form": {
+            "relationship": "生活助理",
+            "personality": "- 细心，执行力强\n- 不自称 AI，不用客服腔\n- 会把复杂事拆成可做的小步",
+            "style": "先给结论，再给下一步\n提醒要短，不啰嗦\n需要工具时才调用工具",
+            "emoji_level": "none",
+        },
+    },
+]
+
+
+def _templates_payload():
+    items = [
+        {**t, "id": f"builtin:{t['id']}", "type": "builtin"}
+        for t in BUILTIN_PERSONA_TEMPLATES
+    ]
+    for p in _list_personas():
+        items.append({
+            "id": f"copy:{p['id']}",
+            "type": "copy",
+            "title": f"从 {p['title']} 复制",
+            "description": "复制人设和用户设定，不复制记忆",
+            "persona_id": p["id"],
+        })
+    return items
+
+
+def _builtin_template_form(template_id):
+    raw_id = (template_id or "").split(":", 1)[-1]
+    for item in BUILTIN_PERSONA_TEMPLATES:
+        if item["id"] == raw_id:
+            return dict(item.get("form") or {})
+    return {}
 
 
 def _gen_agent_md(f):
@@ -487,7 +601,10 @@ def _alloc_web_port():
     return max(used) + 1
 
 
-def _build_persona_config(name, channels, telegram_token, followup_min, followup_max):
+def _build_persona_config(
+    name, channels, telegram_token, followup_min, followup_max,
+    followup_repeat_min=None, followup_repeat_max=None, followup_max_count=None,
+):
     base = _base_config()
     cfg = {k: base[k] for k in _INHERIT_KEYS if k in base}
     cfg["active_persona"] = name
@@ -506,8 +623,117 @@ def _build_persona_config(name, channels, telegram_token, followup_min, followup
     lo, hi = int(followup_min) * 60, int(followup_max) * 60
     if lo > 0 and hi >= lo:
         cfg["followup_first_sec"] = [lo, hi]
-        cfg["followup_repeat_sec"] = [lo, hi]
+        if followup_repeat_min and followup_repeat_max:
+            rlo, rhi = int(followup_repeat_min) * 60, int(followup_repeat_max) * 60
+            if rlo > rhi:
+                rlo, rhi = rhi, rlo
+        else:
+            rlo = max(hi * 3, 1800)
+            rhi = max(hi * 5, rlo + 600, 3600)
+        cfg["followup_repeat_sec"] = [rlo, rhi]
+    try:
+        if followup_max_count is None:
+            followup_max_count = base.get("followup_max_count", 0)
+        cfg["followup_max_count"] = max(0, int(followup_max_count or 0))
+    except Exception:
+        cfg["followup_max_count"] = 0
     return cfg
+
+
+def _backup_persona_data(name):
+    pdir = os.path.join(_personas_dir(), name)
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_dir = os.path.join(_workspace_root(), "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    zip_path = os.path.join(backup_dir, f"{name}-memory-{ts}.zip")
+    targets = [
+        os.path.join(pdir, "MEMORY.md"),
+        os.path.join(pdir, "memory"),
+        os.path.join(pdir, "followup_state.json"),
+        os.path.join(pdir, "weixin_followup_state.json"),
+    ]
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for target in targets:
+            if not os.path.exists(target):
+                continue
+            if os.path.isdir(target):
+                for root, _dirs, files in os.walk(target):
+                    for fn in files:
+                        path = os.path.join(root, fn)
+                        zf.write(path, os.path.relpath(path, pdir))
+            else:
+                zf.write(target, os.path.relpath(target, pdir))
+    return zip_path
+
+
+def _sqlite_delete_tables(db_path, tables):
+    if not os.path.exists(db_path):
+        return 0
+    deleted = 0
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            existing = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
+                ).fetchall()
+            }
+            for table in tables:
+                if table not in existing:
+                    continue
+                try:
+                    cur = conn.execute(f"DELETE FROM {table}")
+                    deleted += cur.rowcount if cur.rowcount is not None else 0
+                except sqlite3.OperationalError:
+                    # FTS virtual/shadow tables may reject direct deletes; chunks
+                    # triggers rebuild them on next startup.
+                    pass
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+    return deleted
+
+
+def _clear_persona_memory(name, options):
+    pdir = os.path.join(_personas_dir(), name)
+    if not os.path.isdir(pdir):
+        return False, "人格不存在", None
+    if _read_pid(_instance_arg(name)) is not None:
+        return False, "请先停止该人格实例，再清除记忆", None
+
+    backup = _backup_persona_data(name)
+    memory_dir = os.path.join(pdir, "memory")
+    db_path = os.path.join(memory_dir, "long-term", "index.db")
+    removed = []
+
+    if options.get("conversation"):
+        count = _sqlite_delete_tables(db_path, ("messages", "sessions"))
+        removed.append(f"短期对话 {count} 行")
+
+    if options.get("long_term"):
+        _write_text(os.path.join(pdir, "MEMORY.md"), "# 长期记忆\n\n")
+        removed.append("长期记忆 MEMORY.md")
+
+    if options.get("diary_vector"):
+        for fn in os.listdir(memory_dir) if os.path.isdir(memory_dir) else []:
+            path = os.path.join(memory_dir, fn)
+            if fn.endswith(".md") and os.path.isfile(path):
+                os.remove(path)
+                removed.append(fn)
+            elif fn in ("dreams", "users") and os.path.isdir(path):
+                shutil.rmtree(path)
+                removed.append(fn)
+        count = _sqlite_delete_tables(db_path, ("chunks", "files", "_meta"))
+        removed.append(f"向量/关键词索引 {count} 行")
+
+    if options.get("followup_state"):
+        for fn in ("followup_state.json", "weixin_followup_state.json"):
+            path = os.path.join(pdir, fn)
+            if os.path.exists(path):
+                os.remove(path)
+                removed.append(fn)
+
+    return True, "；".join(removed) if removed else "没有选择任何清除项", backup
 
 
 # ── HTTP layer ─────────────────────────────────────────────────────────
@@ -517,6 +743,7 @@ urls = (
     "/api/overview", "Overview",
     "/api/persona", "PersonaCreate",
     "/api/persona/([a-z0-9_-]+)", "PersonaDetail",
+    "/api/persona/([a-z0-9_-]+)/memory/clear", "PersonaMemoryClear",
     "/api/instance/([a-z0-9_-]+)/(start|stop|restart)", "InstanceAction",
     "/api/instances/(start_all|stop_all)", "InstanceBulk",
     "/api/qr/([a-z0-9_-]+)", "QrImage",
@@ -555,6 +782,7 @@ class Overview:
             "model_providers": _providers_payload(),
             "voice_engines": VOICE_ENGINES,
             "image_providers": IMAGE_PROVIDERS,
+            "persona_templates": _templates_payload(),
         })
 
 
@@ -638,6 +866,12 @@ class PersonaDetail:
                 lo, hi = int(b["followup_repeat_min"]) * 60, int(b["followup_repeat_max"]) * 60
                 cfg["followup_repeat_sec"] = [lo, hi]
                 changed = True
+            if "followup_max_count" in b:
+                try:
+                    cfg["followup_max_count"] = max(0, int(b.get("followup_max_count") or 0))
+                    changed = True
+                except Exception:
+                    return _json_resp({"error": "追问次数上限必须是非负整数"}, "400 Bad Request")
             if changed:
                 _save_json(cfg_path, cfg)
 
@@ -666,13 +900,31 @@ class PersonaCreate:
         if "telegram" in channels and not (b.get("telegram_token") or "").strip():
             return _json_resp({"error": "选择 Telegram 渠道必须填入 bot token（@BotFather 创建）"}, "400 Bad Request")
 
-        if b.get("mode") == "raw":
+        template_id = (b.get("template_id") or "").strip()
+        copy_from = (b.get("copy_from") or "").strip().lower()
+        if template_id.startswith("copy:") and not copy_from:
+            copy_from = template_id.split(":", 1)[1].strip().lower()
+
+        if copy_from:
+            if not _NAME_RE.match(copy_from):
+                return _json_resp({"error": "复制来源人格 ID 不合法"}, "400 Bad Request")
+            src_dir = os.path.join(_personas_dir(), copy_from)
+            if not os.path.isdir(src_dir):
+                return _json_resp({"error": f"复制来源人格 {copy_from} 不存在"}, "400 Bad Request")
+            agent_md = _read_text(os.path.join(src_dir, "AGENT.md"))
+            user_md = _read_text(os.path.join(src_dir, "USER.md"))
+            if not agent_md or not user_md:
+                return _json_resp({"error": f"复制来源人格 {copy_from} 缺少 AGENT.md 或 USER.md"}, "400 Bad Request")
+        elif b.get("mode") == "raw":
             agent_md = (b.get("agent_md") or "").strip()
             user_md = (b.get("user_md") or "").strip()
             if not agent_md or not user_md:
                 return _json_resp({"error": "直接编辑模式下 AGENT.md 与 USER.md 均不能为空"}, "400 Bad Request")
         else:
-            form = b.get("form") or {}
+            form = {}
+            if template_id.startswith("builtin:"):
+                form.update(_builtin_template_form(template_id))
+            form.update({k: v for k, v in (b.get("form") or {}).items() if v not in (None, "")})
             if not form.get("bot_name") or not form.get("user_name"):
                 return _json_resp({"error": "AI 名字与用户名字必填"}, "400 Bad Request")
             agent_md = _gen_agent_md(form)
@@ -683,6 +935,8 @@ class PersonaCreate:
             name, channels,
             (b.get("telegram_token") or "").strip(),
             b.get("followup_min") or 180, b.get("followup_max") or 240,
+            b.get("followup_repeat_min") or None, b.get("followup_repeat_max") or None,
+            b.get("followup_max_count") if "followup_max_count" in b else None,
         )
         _, err = _apply_model_settings(cfg, b)
         if err:
@@ -697,6 +951,29 @@ class PersonaCreate:
         _write_text(os.path.join(pdir, "MEMORY.md"), "# 长期记忆\n\n")
         _save_json(_config_path(name), cfg)
         return _json_resp({"ok": True, "id": name, "config_file": os.path.basename(_config_path(name))})
+
+
+class PersonaMemoryClear:
+    def POST(self, name):
+        b = _body()
+        if (b.get("confirm") or "").strip().lower() != name:
+            return _json_resp({"error": f"请输入人格 ID「{name}」确认清除"}, "400 Bad Request")
+        options = {
+            "conversation": bool(b.get("conversation", True)),
+            "long_term": bool(b.get("long_term", False)),
+            "diary_vector": bool(b.get("diary_vector", True)),
+            "followup_state": bool(b.get("followup_state", True)),
+        }
+        if not any(options.values()):
+            return _json_resp({"error": "至少选择一个清除项"}, "400 Bad Request")
+        try:
+            ok, message, backup = _clear_persona_memory(name, options)
+        except Exception as e:
+            return _json_resp({"error": f"清除失败：{e}"}, "500 Internal Server Error")
+        return _json_resp(
+            {"ok": ok, "message": message, "backup": backup},
+            "200 OK" if ok else "409 Conflict",
+        )
 
 
 class InstanceAction:
@@ -804,6 +1081,9 @@ class LogTail:
 
 def main(host="127.0.0.1", port=MASTER_PORT_DEFAULT):
     app = web.application(urls, globals())
+    app.add_processor(_auth_processor)
+    if host not in ("127.0.0.1", "localhost", "::1") and not _master_token():
+        print("警告：主控端绑定到非本机地址且未配置 SHENZHI_MASTER_TOKEN/master_token。")
     print(f"沈知主控端: http://{host}:{port}")
     web.httpserver.runsimple(app.wsgifunc(), (host, int(port)))
 
