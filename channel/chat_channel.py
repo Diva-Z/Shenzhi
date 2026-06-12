@@ -304,6 +304,7 @@ class ChatChannel(Channel):
         from common.monologue_filter import (
             control_marker_drop_reason,
             followup_drop_reason,
+            is_probable_full_monologue,
             strip_leaked_monologue,
         )
 
@@ -327,6 +328,13 @@ class ChatChannel(Channel):
 
         if control_marker_drop_reason(cleaned):
             logger.info(f"[chat_channel] dropped control marker text reply ({stage})")
+            return None
+
+        if is_probable_full_monologue(cleaned):
+            logger.warning(
+                "[chat_channel] dropped full monologue text reply "
+                f"({stage}): {cleaned[:100]!r}"
+            )
             return None
 
         return cleaned

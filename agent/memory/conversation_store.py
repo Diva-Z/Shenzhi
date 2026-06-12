@@ -154,7 +154,11 @@ def _clean_display_text(text: str) -> str:
 
 def _sanitize_assistant_content(content: Any) -> Any:
     """Remove leaked reasoning from assistant text blocks before LLM/UI use."""
-    from common.monologue_filter import control_marker_drop_reason, strip_leaked_monologue
+    from common.monologue_filter import (
+        control_marker_drop_reason,
+        is_probable_full_monologue,
+        strip_leaked_monologue,
+    )
 
     if isinstance(content, list):
         cleaned_blocks = []
@@ -162,14 +166,18 @@ def _sanitize_assistant_content(content: Any) -> Any:
             if isinstance(block, dict) and block.get("type") == "text":
                 block = dict(block)
                 text = strip_leaked_monologue(block.get("text", ""))
-                if not text.strip() or control_marker_drop_reason(text):
+                if (
+                    not text.strip()
+                    or control_marker_drop_reason(text)
+                    or is_probable_full_monologue(text)
+                ):
                     continue
                 block["text"] = text
             cleaned_blocks.append(block)
         return cleaned_blocks
     if isinstance(content, str):
         cleaned = strip_leaked_monologue(content)
-        if control_marker_drop_reason(cleaned):
+        if control_marker_drop_reason(cleaned) or is_probable_full_monologue(cleaned):
             return ""
         return cleaned
     return content

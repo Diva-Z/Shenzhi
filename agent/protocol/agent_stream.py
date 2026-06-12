@@ -456,7 +456,23 @@ class AgentStreamExecutor:
                             )
                             logger.info(f"Generated fallback response for empty LLM output")
                     else:
-                        logger.info(f"💭 {assistant_msg[:150]}{'...' if len(assistant_msg) > 150 else ''}")
+                        try:
+                            from common.monologue_filter import (
+                                is_probable_full_monologue,
+                                strip_leaked_monologue,
+                            )
+                            log_preview = strip_leaked_monologue(assistant_msg)
+                            if is_probable_full_monologue(log_preview):
+                                log_preview = ""
+                        except Exception:
+                            log_preview = assistant_msg
+                        if log_preview:
+                            logger.info(
+                                f"💭 {log_preview[:150]}"
+                                f"{'...' if len(log_preview) > 150 else ''}"
+                            )
+                        else:
+                            logger.info("💭 [filtered leaked reasoning]")
                     
                     # If the explicit-response retry produced tool_calls, skip the break
                     # and continue down to the tool execution branch in this same iteration.

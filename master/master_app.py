@@ -33,6 +33,12 @@ if PROJECT_ROOT not in sys.path:
 
 import web  # noqa: E402  (web.py, already a project dependency)
 
+from common.companion_profile import (  # noqa: E402
+    PROFILE_FILENAME,
+    default_companion_profile,
+    load_companion_profile,
+    save_companion_profile,
+)
 from cli.commands.process import (  # noqa: E402
     _read_pid,
     _get_log_file,
@@ -286,6 +292,27 @@ def _write_text(path, content):
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(content)
     os.replace(tmp, path)
+
+
+def _persona_profile_path(name):
+    return os.path.join(_personas_dir(), name, PROFILE_FILENAME)
+
+
+def _load_persona_profile(name):
+    pdir = os.path.join(_personas_dir(), name)
+    return load_companion_profile(pdir) or default_companion_profile()
+
+
+def _save_persona_profile(name, profile):
+    save_companion_profile(_persona_profile_path(name), profile or {})
+
+
+def _profile_from_form(form):
+    return default_companion_profile(
+        bot_name=(form or {}).get("bot_name", ""),
+        user_name=(form or {}).get("user_name", ""),
+        relationship=(form or {}).get("relationship", ""),
+    )
 
 
 # ── Persona inspection ─────────────────────────────────────────────────
@@ -794,6 +821,7 @@ class PersonaDetail:
         info = _persona_info(name)
         info["agent_md"] = _read_text(os.path.join(pdir, "AGENT.md"))
         info["user_md"] = _read_text(os.path.join(pdir, "USER.md"))
+        info["profile"] = _load_persona_profile(name)
         cfg = _load_json(_config_path(name))
         info["model_providers"] = _providers_payload(cfg)
         info["voice_to_text"] = cfg.get("voice_to_text", "")
@@ -841,6 +869,8 @@ class PersonaDetail:
             _write_text(os.path.join(pdir, "AGENT.md"), b["agent_md"])
         if "user_md" in b:
             _write_text(os.path.join(pdir, "USER.md"), b["user_md"])
+        if "profile" in b:
+            _save_persona_profile(name, b.get("profile") or {})
 
         if cfg:
             changed = model_changed
@@ -915,11 +945,13 @@ class PersonaCreate:
             user_md = _read_text(os.path.join(src_dir, "USER.md"))
             if not agent_md or not user_md:
                 return _json_resp({"error": f"复制来源人格 {copy_from} 缺少 AGENT.md 或 USER.md"}, "400 Bad Request")
+            profile = load_companion_profile(src_dir) or default_companion_profile()
         elif b.get("mode") == "raw":
             agent_md = (b.get("agent_md") or "").strip()
             user_md = (b.get("user_md") or "").strip()
             if not agent_md or not user_md:
                 return _json_resp({"error": "直接编辑模式下 AGENT.md 与 USER.md 均不能为空"}, "400 Bad Request")
+            profile = default_companion_profile()
         else:
             form = {}
             if template_id.startswith("builtin:"):
@@ -929,6 +961,7 @@ class PersonaCreate:
                 return _json_resp({"error": "AI 名字与用户名字必填"}, "400 Bad Request")
             agent_md = _gen_agent_md(form)
             user_md = _gen_user_md(form)
+            profile = _profile_from_form(form)
 
         # 配置先构建并校验模型设置，全部通过才写盘（避免留下半成品人格目录）
         cfg = _build_persona_config(
@@ -949,6 +982,7 @@ class PersonaCreate:
         _write_text(os.path.join(pdir, "AGENT.md"), agent_md)
         _write_text(os.path.join(pdir, "USER.md"), user_md)
         _write_text(os.path.join(pdir, "MEMORY.md"), "# 长期记忆\n\n")
+        _save_persona_profile(name, profile)
         _save_json(_config_path(name), cfg)
         return _json_resp({"ok": True, "id": name, "config_file": os.path.basename(_config_path(name))})
 

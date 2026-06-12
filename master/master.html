@@ -43,7 +43,9 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .modal input[type=text],.modal input[type=password],.modal input[type=number],.modal textarea,.modal select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;font-family:inherit}
 .modal textarea{resize:vertical;line-height:1.6}
 .modal textarea.md{font-family:Consolas,monospace;font-size:12.5px}
+.modal input[type=range]{width:100%;accent-color:var(--acc)}
 .f1{flex:1;min-width:150px}
+.section-title{font-size:13px;color:var(--text);font-weight:600;margin:14px 0 8px}
 .checks{display:flex;gap:18px;padding-top:4px}
 .checks label{display:flex;align-items:center;gap:6px;color:var(--text);font-size:13px;cursor:pointer}
 .tabs{display:flex;gap:6px;margin-bottom:16px}
@@ -123,7 +125,7 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
     <div id="pane-form">
       <div class="row">
         <div class="f1"><label>AI 名字</label><input type="text" id="c-bot" placeholder="如 晨风"></div>
-        <div class="f1"><label>用户名字</label><input type="text" id="c-user" placeholder="如 晚晴"></div>
+        <div class="f1"><label>用户名字</label><input type="text" id="c-user" placeholder="如 用户A"></div>
         <div class="f1"><label>关系（AI 是用户的——）</label><input type="text" id="c-rel" placeholder="如 青梅竹马 / 女朋友"></div>
       </div>
       <div class="row"><div class="f1"><label>背景故事（两人怎么认识、现在的生活）</label><textarea id="c-bg" rows="4"></textarea></div></div>
@@ -193,6 +195,47 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
       <div class="f1"><label id="e-imgm-label">图像生成模型</label><input type="text" id="e-imgm" placeholder="不修改请留空"></div>
     </div>
     <div class="row"><div class="f1"><label>Telegram bot token（留空 = 不修改）</label><input type="password" id="e-tg-token" placeholder="不修改请留空"></div></div>
+    <div class="section-title">结构化个性化档案（保存后重启生效）</div>
+    <div class="row">
+      <div class="f1">
+        <label style="display:flex;align-items:center;gap:8px;color:var(--text)"><input type="checkbox" id="e-p-enabled"> 启用个性化档案</label>
+        <p class="hint">不替代 AGENT.md，只补充可调参数：称呼、边界、主动程度、渠道差异等。</p>
+      </div>
+      <div class="f1"><label>关系阶段</label><input type="text" id="e-p-stage" placeholder="如 初识 / 暧昧 / 稳定陪伴"></div>
+      <div class="f1"><label>AI 称呼用户</label><input type="text" id="e-p-useraddr" placeholder="如 用户A / 你"></div>
+      <div class="f1"><label>用户称呼 AI</label><input type="text" id="e-p-botaddr" placeholder="如 沈知 / 晨风"></div>
+    </div>
+    <div class="row">
+      <div class="f1"><label>温暖度 <span id="e-p-warmth-val">70</span></label><input type="range" id="e-p-warmth" min="0" max="100" step="5" oninput="syncProfileSliders()"></div>
+      <div class="f1"><label>幽默 <span id="e-p-humor-val">30</span></label><input type="range" id="e-p-humor" min="0" max="100" step="5" oninput="syncProfileSliders()"></div>
+      <div class="f1"><label>调侃 <span id="e-p-teasing-val">10</span></label><input type="range" id="e-p-teasing" min="0" max="100" step="5" oninput="syncProfileSliders()"></div>
+      <div class="f1"><label>逻辑感 <span id="e-p-logic-val">60</span></label><input type="range" id="e-p-logic" min="0" max="100" step="5" oninput="syncProfileSliders()"></div>
+      <div class="f1"><label>主动性 <span id="e-p-initiative-val">50</span></label><input type="range" id="e-p-initiative" min="0" max="100" step="5" oninput="syncProfileSliders()"></div>
+    </div>
+    <div class="row">
+      <div class="f1"><label>回复长度</label><select id="e-p-replylen"><option value="short">短句</option><option value="normal">适中</option><option value="detailed">较详细</option></select></div>
+      <div class="f1"><label>表情密度</label><select id="e-p-emoji"><option value="none">几乎不用</option><option value="few">少量</option><option value="normal">适度</option><option value="many">较多</option></select></div>
+      <div class="f1"><label>当前 mood</label><input type="text" id="e-p-mood" placeholder="如 stable / tired / playful"></div>
+      <div class="f1"><label>情绪表达方式</label><input type="text" id="e-p-moodexpr" placeholder="如 克制一点，不夸张撒娇"></div>
+    </div>
+    <div class="row">
+      <div class="f1"><label>相处边界（一行一条）</label><textarea id="e-p-boundaries" rows="3" placeholder="如 深夜少追问&#10;工作忙时只给一句提醒"></textarea></div>
+      <div class="f1"><label>禁忌/避免（一行一条）</label><textarea id="e-p-taboos" rows="3" placeholder="如 不反复问为什么不回复&#10;不在普通聊天里讲大道理"></textarea></div>
+    </div>
+    <div class="row">
+      <div class="f1">
+        <label style="display:flex;align-items:center;gap:8px;color:var(--text)"><input type="checkbox" id="e-p-proactive"> 允许主动关怀</label>
+      </div>
+      <div class="f1"><label>免打扰时间</label><input type="text" id="e-p-quiet" placeholder="23:30-08:30"></div>
+      <div class="f1"><label>每日主动上限</label><input type="number" id="e-p-maxdaily" min="0" max="12"></div>
+      <div class="f1"><label>主动场景（一行一条）</label><textarea id="e-p-scenarios" rows="3" placeholder="如 早安问候&#10;睡眠提醒&#10;GitHub PR 提醒"></textarea></div>
+    </div>
+    <div class="row">
+      <div class="f1"><label>Telegram 风格差异</label><input type="text" id="e-p-tg" placeholder="如 多气泡，短句"></div>
+      <div class="f1"><label>微信风格差异</label><input type="text" id="e-p-wx" placeholder="如 更像熟人聊天，少解释"></div>
+      <div class="f1"><label>Web 风格差异</label><input type="text" id="e-p-web" placeholder="如 可稍微完整一些"></div>
+    </div>
+    <div class="row"><div class="f1"><label>其他个性化偏好（一行一条）</label><textarea id="e-p-notes" rows="3"></textarea></div></div>
     <div class="row"><div class="f1"><label>AGENT.md（AI 人设）</label><textarea id="e-agent" class="md" rows="16"></textarea></div></div>
     <div class="row"><div class="f1"><label>USER.md（用户设定）</label><textarea id="e-user" class="md" rows="9"></textarea></div></div>
     <p class="hint">人设与配置改动需重启实例后生效（约 10 秒，仅影响该人格）。</p>
@@ -334,6 +377,102 @@ function mediaFields(prefix){
   };
   if(vrep) out.voice_reply_voice = (vrep === 'on'); // 空 = 不修改
   return out;
+}
+
+function linesToText(v){
+  if(Array.isArray(v)) return v.join('\n');
+  return (v || '').toString();
+}
+
+function textToLines(id){
+  return ($(id).value || '').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+}
+
+function pct(v, fallback){
+  const n = Number(v);
+  if(Number.isFinite(n)) return Math.max(0, Math.min(100, Math.round(n * 100)));
+  return fallback;
+}
+
+function syncProfileSliders(){
+  for(const id of ['warmth','humor','teasing','logic','initiative']){
+    const el = $(`e-p-${id}`);
+    const label = $(`e-p-${id}-val`);
+    if(el && label) label.textContent = el.value;
+  }
+}
+
+function setProfileFields(profile){
+  const p = profile || {};
+  const rel = p.relationship || {};
+  const style = p.style || {};
+  const mood = p.mood || {};
+  const proactive = p.proactive || {};
+  const channels = p.channels || {};
+  $('e-p-enabled').checked = p.enabled !== false;
+  $('e-p-stage').value = rel.stage || '';
+  $('e-p-useraddr').value = rel.user_address || '';
+  $('e-p-botaddr').value = rel.bot_address || '';
+  $('e-p-warmth').value = pct(style.warmth, 70);
+  $('e-p-humor').value = pct(style.humor, 30);
+  $('e-p-teasing').value = pct(style.teasing, 10);
+  $('e-p-logic').value = pct(style.logic, 60);
+  $('e-p-initiative').value = pct(style.initiative, 50);
+  $('e-p-replylen').value = style.reply_length || 'short';
+  $('e-p-emoji').value = style.emoji_density || 'few';
+  $('e-p-mood').value = mood.current || 'stable';
+  $('e-p-moodexpr').value = mood.expression || '';
+  $('e-p-boundaries').value = linesToText(rel.boundaries);
+  $('e-p-taboos').value = linesToText(rel.taboos);
+  $('e-p-proactive').checked = proactive.enabled !== false;
+  $('e-p-quiet').value = proactive.quiet_hours || '23:30-08:30';
+  $('e-p-maxdaily').value = Number.isFinite(Number(proactive.max_daily)) ? proactive.max_daily : 3;
+  $('e-p-scenarios').value = linesToText(proactive.scenarios);
+  $('e-p-tg').value = (channels.telegram && channels.telegram.notes) || '';
+  $('e-p-wx').value = (channels.weixin && channels.weixin.notes) || '';
+  $('e-p-web').value = (channels.web && channels.web.notes) || '';
+  $('e-p-notes').value = linesToText(p.notes);
+  syncProfileSliders();
+}
+
+function profileFields(){
+  const score = id => Math.max(0, Math.min(1, (+$(`e-p-${id}`).value || 0) / 100));
+  return {
+    version: 1,
+    enabled: $('e-p-enabled').checked,
+    relationship: {
+      stage: $('e-p-stage').value.trim(),
+      user_address: $('e-p-useraddr').value.trim(),
+      bot_address: $('e-p-botaddr').value.trim(),
+      boundaries: textToLines('e-p-boundaries'),
+      taboos: textToLines('e-p-taboos'),
+    },
+    style: {
+      warmth: score('warmth'),
+      humor: score('humor'),
+      teasing: score('teasing'),
+      logic: score('logic'),
+      initiative: score('initiative'),
+      reply_length: $('e-p-replylen').value,
+      emoji_density: $('e-p-emoji').value,
+    },
+    mood: {
+      current: $('e-p-mood').value.trim(),
+      expression: $('e-p-moodexpr').value.trim(),
+    },
+    proactive: {
+      enabled: $('e-p-proactive').checked,
+      quiet_hours: $('e-p-quiet').value.trim(),
+      max_daily: Math.max(0, Math.min(12, +$('e-p-maxdaily').value || 0)),
+      scenarios: textToLines('e-p-scenarios'),
+    },
+    channels: {
+      telegram: {notes: $('e-p-tg').value.trim()},
+      weixin: {notes: $('e-p-wx').value.trim()},
+      web: {notes: $('e-p-web').value.trim()},
+    },
+    notes: textToLines('e-p-notes'),
+  };
 }
 
 function fillTemplateSelect(){
@@ -509,6 +648,7 @@ async function openEdit(id){
     $('e-imgm').value = '';
     $('e-imgm').placeholder = d.image_model ? `当前 ${d.image_model}，留空 = 不修改` : '当前自动，不修改请留空';
     $('e-agent').value = d.agent_md; $('e-user').value = d.user_md;
+    setProfileFields(d.profile || {});
     show('m-edit');
   } catch(e){ toast(e.message); }
 }
@@ -521,6 +661,7 @@ async function submitEdit(restart){
     followup_max_count: Math.max(0, +$('e-fcount').value||0),
     ...modelFields('e'),
     ...mediaFields('e'),
+    profile: profileFields(),
     restart,
   };
   if(restart) toast('保存并重启中…（约 10 秒）', 15000);

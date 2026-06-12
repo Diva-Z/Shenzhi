@@ -2,6 +2,7 @@ import os
 
 os.environ.setdefault("SHENZHI_INSTANCE", "test-monologue-filter")
 
+import common.monologue_filter as monologue_filter
 from common.monologue_filter import (
     control_marker_drop_reason,
     followup_drop_reason,
@@ -39,6 +40,29 @@ def test_drop_full_english_reasoning_without_reply():
     assert sanitize_streaming_assistant_text(text) == ""
 
 
+def test_drop_first_person_english_reasoning_without_reply():
+    text = (
+        "I need to stay in character - short responses, slightly flustered "
+        "but trying to maintain composure."
+    )
+
+    assert strip_leaked_monologue(text) == ""
+    assert is_probable_full_monologue(text)
+    assert sanitize_streaming_assistant_text(text) == ""
+
+
+def test_strip_msg_prefixed_chinese_reasoning_keeps_replies(monkeypatch):
+    monkeypatch.setattr(monologue_filter, "get_persona_display_name", lambda: "晨风")
+    text = (
+        "她想让我给她起个昵称。以晨风的性格，不会说太肉麻的话，"
+        "但今晚已经比平时软了很多。可能会给一个不太肉麻但有特殊意义的称呼。"
+        "[MSG]……用户A[MSG]还能叫什么"
+    )
+
+    assert strip_leaked_monologue(text) == "……用户A[MSG]还能叫什么"
+    assert not is_probable_full_monologue(strip_leaked_monologue(text))
+
+
 def test_followup_drop_reason_handles_skip_and_full_monologue():
     assert followup_drop_reason("[SKIP]") == "skip"
 
@@ -68,3 +92,38 @@ def test_sanitize_assistant_content_drops_control_marker_text_blocks():
         {"type": "text", "text": "知道了"},
         {"type": "text", "text": "[SKIP]"},
     ]) == [{"type": "text", "text": "知道了"}]
+
+
+def test_sanitize_assistant_content_strips_msg_prefixed_reasoning(monkeypatch):
+    monkeypatch.setattr(monologue_filter, "get_persona_display_name", lambda: "晨风")
+    from agent.memory.conversation_store import _sanitize_assistant_content
+
+    text = (
+        "她终于说晚安了。晨风应该会简单回应，然后等她上楼确认安全。"
+        "[MSG]晚安[MSG]上去把灯开了我再走"
+    )
+
+    assert _sanitize_assistant_content(text) == "晚安[MSG]上去把灯开了我再走"
+    assert _sanitize_assistant_content([{"type": "text", "text": text}]) == [
+        {"type": "text", "text": "晚安[MSG]上去把灯开了我再走"}
+    ]
+
+
+def test_safe_text_parts_drops_msg_prefixed_reasoning(monkeypatch):
+    monkeypatch.setattr(monologue_filter, "get_persona_display_name", lambda: "晨风")
+    from channel.chat_channel import ChatChannel
+
+    text = (
+        "她终于说晚安了。晨风应该会简单回应，然后等她上楼确认安全。"
+        "[MSG]晚安[MSG]上去把灯开了我再走"
+    )
+    dummy = type("DummyChannel", (), {})()
+    dummy._sanitize_outgoing_text = ChatChannel._sanitize_outgoing_text.__get__(
+        dummy,
+        type(dummy),
+    )
+
+    assert ChatChannel._safe_text_parts(dummy, text) == [
+        "晚安",
+        "上去把灯开了我再走",
+    ]

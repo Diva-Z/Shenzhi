@@ -147,7 +147,7 @@ def build_agent_system_prompt(
     # 6.5 Companion profile: ShenZhi persona chats should not drift into
     # generic assistant/tool-first behaviour.
     if conf().get("companion_mode", True) and conf().get("active_persona"):
-        sections.extend(_build_companion_profile_section(language))
+        sections.extend(_build_companion_profile_section(workspace_dir, language))
 
     # 7. Runtime info (meta info, goes last)
     if runtime_info:
@@ -187,7 +187,17 @@ def _build_identity_section(base_persona: Optional[str], language: str) -> List[
     return []
 
 
-def _build_companion_profile_section(language: str) -> List[str]:
+def _build_companion_profile_section(workspace_dir: str, language: str) -> List[str]:
+    try:
+        from common.companion_profile import companion_profile_prompt_lines
+        structured_profile = companion_profile_prompt_lines(workspace_dir, language)
+    except Exception as e:
+        logger.warning(f"[PromptBuilder] Failed to build companion profile: {e}")
+        structured_profile = []
+
+    if structured_profile:
+        return structured_profile
+
     if language == "en":
         return [
             "## Companion profile",

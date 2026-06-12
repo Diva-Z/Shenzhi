@@ -40,19 +40,32 @@ _META_MARKERS = (
 
 _CJK_RE = re.compile(r'[\u3400-\u9fff]')
 _PARAGRAPH_RE = re.compile(r'\n\s*\n+')
+_MSG_MARKER_RE = re.compile(r'\[\s*MSG\s*\]', re.IGNORECASE)
 _REASONING_HEADING_RE = re.compile(
     r'^\s*(?:分析|思考|推理|判断|内心|草稿|回复思路|思路|reasoning|analysis)\s*[:：]?',
     re.IGNORECASE,
 )
 _EN_REASONING_START_RE = re.compile(
-    r'^\s*(?:the\s+user|user|he|she|they)\s+'
-    r'(?:sent|said|wrote|asked|is|seems|appears|probably|likely|just|wants|needs|has)\b',
+    r'^\s*(?:(?:the\s+)?user|he|she|they)\s+'
+    r'(?:sent|said|wrote|asked|is|seems|appears|probably|likely|just|'
+    r'wants|needs|has|would|will|can|keeps?|continues?)\b',
+    re.IGNORECASE,
+)
+_EN_FIRST_PERSON_META_RE = re.compile(
+    r'^\s*(?:i\s+(?:need|should|would|will|can|have\s+to|must)\b|'
+    r'as\s+[\w-]{1,40}\b|in\s+character\s+as\b)',
     re.IGNORECASE,
 )
 _EN_META_RE = re.compile(
-    r'\b(?:user|message|reply|respond|response|persona|character|tone|'
+    r'\b(?:user|message|reply|respond|responses?|persona|character|tone|'
     r'conversation|follow[- ]?up|should|need to|needs to|likely|probably|'
-    r'intent|intention|context)\b',
+    r'intent|intention|context|stay\s+in\s+character|in\s+character|'
+    r'keep\s+it\s+short|short\s+responses?|composure|flustered)\b',
+    re.IGNORECASE,
+)
+_EN_HIGH_SIGNAL_META_RE = re.compile(
+    r'\b(?:stay\s+in\s+character|in\s+character|keep\s+it\s+short|'
+    r'short\s+responses?|composure|flustered)\b',
     re.IGNORECASE,
 )
 _REPLY_LABEL_RE = re.compile(
@@ -129,8 +142,9 @@ def _looks_like_reasoning(text: str, persona_name: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
-    if "[MSG]" in t.upper():
-        return False
+    if _MSG_MARKER_RE.search(t):
+        first = _MSG_MARKER_RE.split(t, maxsplit=1)[0].strip()
+        return bool(first and _looks_like_reasoning(first, persona_name))
     if _prefix_is_monologue(t, persona_name):
         return True
     first_line = t.splitlines()[0].strip()
@@ -139,8 +153,19 @@ def _looks_like_reasoning(text: str, persona_name: str) -> bool:
     lower = t.lower()
     if _EN_REASONING_START_RE.match(lower) and _EN_META_RE.search(lower):
         return True
+    if _EN_FIRST_PERSON_META_RE.match(lower) and _EN_HIGH_SIGNAL_META_RE.search(lower):
+        return True
     if not _has_cjk(t) and len(t) >= 40 and _EN_META_RE.search(lower):
-        if "user" in lower or "reply" in lower or "respond" in lower:
+        if any(
+            marker in lower
+            for marker in (
+                "user",
+                "reply",
+                "respond",
+                "response",
+                "responses",
+            )
+        ):
             return True
     return False
 
@@ -151,7 +176,8 @@ def _extract_cjk_tail(text: str, persona_name: str) -> str:
         return ""
     pieces = []
     for para in _PARAGRAPH_RE.split(text.replace("\r\n", "\n").replace("\r", "\n")):
-        pieces.extend(para.splitlines())
+        for line in para.splitlines():
+            pieces.extend(_MSG_MARKER_RE.split(line))
     for piece in reversed(pieces):
         p = piece.strip()
         if not p or not _has_cjk(p):
@@ -162,6 +188,19 @@ def _extract_cjk_tail(text: str, persona_name: str) -> str:
         m = _CJK_RE.search(p)
         return p[m.start():].strip() if m else p
     return ""
+
+
+def _strip_msg_reasoning_prefix(text: str, persona_name: str) -> str:
+    parts = _MSG_MARKER_RE.split(text, maxsplit=1)
+    if len(parts) < 2:
+        return text
+    prefix = parts[0].strip()
+    reply = parts[1].strip()
+    if not prefix or not reply:
+        return text
+    if _looks_like_reasoning(prefix, persona_name):
+        return reply
+    return text
 
 
 def _strip_once(text: str, persona_name: str) -> str:
@@ -223,7 +262,8 @@ def _sanitize_text(text: str, persona_name: str) -> str:
     result = text
     # 独白可能含内部拼接点被分次剥离，给个小上限防御。
     for _ in range(4):
-        stripped = _strip_once(result, persona_name)
+        stripped = _strip_msg_reasoning_prefix(result, persona_name)
+        stripped = _strip_once(stripped, persona_name)
         stripped = _strip_labeled_reply(stripped, persona_name)
         stripped = _strip_paragraph_reasoning(stripped, persona_name)
         stripped = _strip_full_english_reasoning(stripped, persona_name)
@@ -273,7 +313,6 @@ def sanitize_streaming_assistant_text(text: str) -> str:
 
 # 追问回复里模型主动放弃的合法出口标记（prompt 里约定）
 _SKIP_RE = re.compile(r'\[\s*SKIP\s*\]', re.IGNORECASE)
-_MSG_MARKER_RE = re.compile(r'\[\s*MSG\s*\]', re.IGNORECASE)
 _CONTROL_PADDING_CHARS = ' \t\r\n"\'`“”‘’（）()【】{}.,，。;；:：!！?？…-—_*/\\|'
 
 
