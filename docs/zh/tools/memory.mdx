@@ -1,9 +1,14 @@
 ---
-title: memory - 记忆与知识
-description: 搜索和读取长期记忆及知识库文件
+title: memory - 记忆、知识与原文回忆
+description: 搜索长期记忆、知识库文件和原始聊天记录
 ---
 
-记忆工具包含两个子工具：`memory_search`（搜索记忆）和 `memory_get`（读取记忆或知识文件）。
+记忆工具包含四个子工具：
+
+- `memory_search`：搜索长期记忆 / 每日记忆 / 知识库索引
+- `memory_get`：读取记忆或知识文件
+- `conversation_search`：搜索 SQLite 中逐条落盘的原始聊天记录
+- `conversation_get`：按 `session_id + seq` 读取原始聊天上下文
 
 当 [知识库](/zh/knowledge) 功能开启时，这两个工具同时支持访问 `memory/` 和 `knowledge/` 目录下的文件。
 
@@ -29,12 +34,45 @@ description: 搜索和读取长期记忆及知识库文件
 | `start_line` | integer | 否 | 起始行号 |
 | `end_line` | integer | 否 | 结束行号 |
 
+## conversation_search
+
+搜索原始聊天记录。它查的是会话数据库里的逐条消息，不是 `MEMORY.md` 或每日摘要。适合回答：
+
+- “我以前是不是说过……”
+- “我当时原话怎么说的？”
+- “你上次怎么回复我的？”
+- “某天我们聊到 X 的时候说了什么？”
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `query` | string | 是 | 搜索关键词或短语 |
+| `session_id` | string | 否 | 指定会话；默认当前会话 |
+| `search_all_sessions` | boolean | 否 | 是否跨会话搜索；只有用户明确要求时才开启 |
+| `role` | string | 否 | `user` / `assistant` / `all` |
+| `days` | integer | 否 | 只搜索最近 N 天 |
+| `limit` | integer | 否 | 返回条数，默认 8，最大 30 |
+
+返回结果会包含 `session_id` 和 `seq`，用于后续调用 `conversation_get`。
+
+## conversation_get
+
+读取 `conversation_search` 命中的原始消息前后文，用来核对原话，避免只凭摘要记忆回答。
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `seq` | integer | 是 | `conversation_search` 返回的消息序号 |
+| `session_id` | string | 否 | 指定会话；默认当前会话 |
+| `before` | integer | 否 | 向前读取多少条原始消息，默认 3 |
+| `after` | integer | 否 | 向后读取多少条原始消息，默认 3 |
+| `include_internal` | boolean | 否 | 是否包含工具结果等内部消息，默认 false |
+
 ## 工作方式
 
 Agent 会在以下场景自动调用记忆工具：
 
 - 用户分享重要信息时 → 存储到记忆
 - 需要参考历史信息时 → 搜索相关记忆
+- 用户询问历史原话 / 是否说过某事时 → 搜索原始聊天记录并读取上下文
 - 对话达到一定长度时 → 提取摘要存储
 - 讨论到专业知识时 → 检索知识库中的相关页面
 

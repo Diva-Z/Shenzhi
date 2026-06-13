@@ -1,151 +1,155 @@
 # 沈知 (ShenZhi)
 
-> 多人格 AI 伴侣平台 —— 每个人格都是一个有独立人设、独立记忆、独立 bot 的"人"，
-> 在微信 / Telegram / Web 上与你长期相处。
+沈知是基于 [CowAgent](https://github.com/zhayujie/CowAgent) 二次开发的多人格 AI 伴侣项目。它把原来的 Agent 框架改造成更适合长期陪伴的形态：一个人格对应一套独立人设、独立用户画像、独立长期记忆、独立运行配置和独立 bot 进程。
 
-基于开源项目 [CowAgent](https://github.com/zhayujie/CowAgent)（MIT）二次开发，
-在其 Agent 框架之上重构为「AI 伴侣」形态：人格系统、多实例编排、拟人化对话机制与分层记忆。
+项目仍保留 CowAgent 的工具、记忆、Web 控制台和多渠道能力，并在此基础上增加了人格模板、主控端、多实例编排、追问节奏、原文回忆和拟人化消息拆分。
 
----
+## 当前能力
 
-## ✨ 特性
+- 多人格：`shenzhi`、`chenfeng`、`haiyang` 等人格可以并行运行，互不串记忆。
+- 多渠道：支持 Web、Telegram、微信 ilink bot；同一人格也可以同时开启多个渠道。
+- 主控端：`shenzhi master` 打开 `http://localhost:9990`，可统一启动、停止、编辑、备份、恢复和删除人格。
+- 人格创建：主控端支持分页表单、关系/性格/说话风格/相处规则标签、自定义标签，以及用户自行填写 API 后的一键生成人设素材。
+- 精确回忆：除 `MEMORY.md` 长期记忆外，每条原始对话会落 SQLite；需要核对原话时可用 `conversation_search` 和 `conversation_get` 工具读取原文上下文。
+- 分气泡发送：优先按 `[MSG]` 拆分；模型漏写 `[MSG]` 时，会对短句、换行和空行做保守兜底拆分。
+- 运行隔离：每个实例有自己的 `config-{name}.json`、pid、日志、追问状态和微信凭证路径。
 
-### 🎭 人格系统（Persona）
+## 内置人格模板
 
-一个人格 = **人设 + 用户设定 + 长期记忆** 三位一体，互相完全隔离：
+仓库内置三个可直接安装的人格模板：
 
-```
-~/cow/personas/{name}/
-├── AGENT.md        # TA 是谁：身份、背景故事、性格、说话风格、对话示例
-├── USER.md         # TA 眼中的你：身份、习惯、相处规则
-├── MEMORY.md       # 长期记忆（每轮注入，随关系演变）
-└── memory/         # 每日日记 + 向量索引 + 对话历史（SQLite）
-```
+| 人格 ID | 名称 | 默认用途 |
+|---|---|---|
+| `shenzhi` | 沈知 | 默认人格，建议先用 Web 渠道跑通 |
+| `chenfeng` | 晨风 | 微信人格模板 |
+| `haiyang` | 海洋 | Telegram 人格模板 |
 
-- 人格之间记忆**严格隔离**，绝不串台；切换/并行运行都无缝衔接
-- 新建人格零代码：建目录放两个 markdown，或直接用主控端表单生成
+模板位于 `templates/personas/`，每个人格只包含：
 
-### 🖥 主控端（Master Console）
+- `AGENT.md`：AI 的身份、人设、背景故事、性格、说话风格和对话示例。
+- `USER.md`：模板中的用户画像、关系设定和相处偏好。
+- `MEMORY.md`：空长期记忆骨架。
 
-`shenzhi master` 启动，浏览器打开 `http://localhost:9990`：
+仓库不会上传 API key、Telegram token、微信登录凭证、SQLite 记忆库、向量索引、followup 状态、日志或备份包。clone 后需要自己补配置才能运行。
 
-- **人格管理**：引导表单（名字/关系/背景/性格/说话风格/表情习惯/few-shot）一键生成人设，或直接粘贴 Markdown；随时在线编辑、保存并重启
-- **实例编排**：一个人格 = 一个独立 bot 进程，单个启停重启 + **一键全部启动/全部停止**，最多 3 个并行
-- **按人格配模型**：新建/编辑里可独立设置对话模型（MiMo / DeepSeek / 通义千问 / GLM / Kimi / MiniMax / Gemini / Claude）、API key/base，以及语音识别/合成引擎、音色、图像生成模型；留空即继承默认配置，带厂商-模型匹配与 key 缺失校验
-- **追问节奏**：每个人格独立设置首次/再次追问等待区间（分钟），区间内随机取值更像真人
-- **状态总览**：运行状态、渠道、当前模型、追问间隔、微信登录状态实时刷新
-- **微信扫码**：登录二维码网页弹窗显示；登录窗口超时后再点按钮会自动重启实例换新码，即点即扫
-- **日志查看** 与各实例原生控制台直达（任何人格勾选 Web 渠道即获得自己的控制台，端口自动分配）
-
-一个人格可同时接多个渠道（如微信 + Telegram 共用同一套记忆），编辑里勾选即可。
-
-### 📱 多渠道
-
-| 渠道 | 说明 |
-|---|---|
-| **微信** | 腾讯官方 ilink bot（非灰色协议，无封号风险），扫码登录，凭证持久化 |
-| **Telegram** | 标准 Bot API，长轮询 + 断线自愈 watchdog，支持语音收发 |
-| **Web** | 自带完整控制台：聊天、模型/API key 配置、记忆与知识库管理、调度任务、日志 |
-
-### 💬 拟人化对话
-
-- **`[MSG]` 多气泡**：一次回复拆成多条短消息间隔发出，像真人连发
-- **追问机制**：你长时间不回复，TA 会自然地追问一句——延迟可按人格配置（如 10 分钟或 3 小时），带时间感知（上午聊午饭、下午追问会改口"中午吃了啥"），不质问不粘人
-- **主动问候**：cron 定时任务，TA 会在固定时间主动找你说话（热加载，改配置即生效）
-- **语音**：发语音回语音、发文字回文字（DashScope STT/TTS，多种音色）
-- **多模态**：发图片 TA 能看懂并回应（取决于所选模型）
-
-### 🧠 分层记忆
-
-| 层 | 机制 |
-|---|---|
-| 工作上下文 | 最近 N 轮对话直接在场（默认 30 轮，溢出自动摘要） |
-| 每日整合 | 每晚把当天对话蒸馏成日记；**关机漏跑会在下次启动自动补做** |
-| 长期记忆 | MEMORY.md 永久事实层，每轮注入；向量 + 关键词混合检索（DashScope embedding） |
-
-每条消息即时落盘 SQLite——**随时关机不丢数据**，适合个人电脑非 7×24 运行。
-
-### 🔧 工程化
-
-- 多实例进程管理（`--instance`），pid/日志/配置按实例隔离
-- Telegram polling watchdog（主动探活，不误重启）、微信二维码登录抗网络抖动
-- 追问状态持久化（重启不丢计时）、端口冲突自动处理
-- 全配置驱动：换模型/换 key/调追问节奏，改 JSON 即可
-
----
-
-## 💻 系统要求
-
-**不需要 GPU。** 对话生成、语音、向量 embedding 全部走云端 API，本地只做消息收发、SQLite 读写和定时调度：
-
-| 项 | 要求 |
-|---|---|
-| CPU / 显卡 | 无要求，核显或无显卡均可；近十年内任何电脑、N100 级小主机都绰绰有余 |
-| 内存 | 每实例约 200-300 MB（3 实例 + 主控端 ≈ 1 GB） |
-| 硬盘 | 几十 MB 量级（记忆数据库 + 日志） |
-| 网络 | 需要稳定联网；Telegram 渠道需自备代理 |
-| 在线时长 | **无需 7×24**：每条消息即时落盘，漏跑的每日记忆整合会在下次开机自动补做 |
-
-成本在 API 调用量，不在硬件。
-
----
-
-## 🚀 快速开始
+## 快速开始
 
 ```powershell
-# 1. 创建并激活 conda 虚拟环境（推荐，Python 3.11）
+# 1. 克隆并进入项目
+git clone https://github.com/Diva-Z/Shenzhi.git
+cd Shenzhi
+
+# 2. 创建环境，推荐 Python 3.11
 conda create -n shenzhi python=3.11 -y
 conda activate shenzhi
 
-# 2. 安装依赖
+# 3. 安装依赖和 CLI
 pip install -r requirements.txt
-pip install -e .          # 注册 shenzhi 命令
+pip install -e .
 
-# 3. 配置
-copy config-template.json config.json
-# 编辑 config.json：填入模型 API key、选择渠道（weixin / telegram / web）
-
-# 4. 启动
-shenzhi start             # 默认实例
-shenzhi master            # 主控端（管理人格与实例）
+# 4. 安装三个人格模板，并生成可编辑配置
+python scripts/install_persona_templates.py --write-configs
 ```
 
-> 不用 conda 也可以：任意 Python 3.10+ 的 venv 均可，后续命令一致。
-> 日常使用建议把启动命令写成脚本（激活环境 → `cd` 到项目目录 → `shenzhi start`），开机双击即可。
+脚本会把模板复制到 `~/cow/personas/`，并生成：
 
-新建更多人格：打开主控端 → 「＋ 新建人格」→ 填表单 → 启动。
-每个人格会得到独立的 `config-{name}.json` 与 `personas/{name}/` 目录。
+- `config.json`：沈知，默认 `web` 渠道，端口 `9899`。
+- `config-chenfeng.json`：晨风，默认 `weixin` 渠道。
+- `config-haiyang.json`：海洋，默认 `telegram` 渠道。
 
-## 📋 CLI
-
-```
-shenzhi start|stop|restart|status|logs [--instance <name>]
-shenzhi master [--port 9990] [--stop]
-shenzhi skill / knowledge / install-browser ...
-```
-
-## ⚙️ 关键配置（config.json / config-{name}.json）
+然后编辑这些配置文件，至少补齐：
 
 | 字段 | 说明 |
 |---|---|
-| `bot_type` / `model` | 模型供应商与型号（两者需匹配） |
-| `channel_type` | `"weixin"` / `"telegram"` / 逗号分隔多渠道 |
-| `active_persona` | 该实例承载的人格（对应 `personas/` 目录名） |
-| `followup_first_sec` / `followup_repeat_sec` | 追问延迟区间 `[min, max]` 秒，按实例独立 |
-| `telegram_token` | TG bot token（每个人格一个独立 bot） |
-| `weixin_credentials_path` | 微信凭证路径（多微信实例必须各自独立） |
-| `web_console` / `web_port` | 该实例的 Web 控制台开关与端口 |
-| `web_auto_open_browser` | 实例启动时是否自动打开控制台网页（默认 `false`，多实例下弹窗很吵） |
+| `bot_type` / `model` | 模型厂商和模型名，必须匹配。 |
+| `{provider}_api_key` | 所选模型对应的 API key，例如 `deepseek_api_key`、`mimo_api_key`、`dashscope_api_key`。 |
+| `{provider}_api_base` | 自定义 API base；不用自定义时保留默认。 |
+| `channel_type` | `web`、`telegram`、`weixin`，或逗号分隔的多渠道。 |
+| `telegram_token` | Telegram 人格需要填写独立 bot token。 |
+| `telegram_proxy` | Telegram 在需要代理的网络环境中填写。 |
+| `weixin_credentials_path` | 微信人格必须各自独立，避免复用旧登录凭证。 |
+| `web_console` / `web_port` | 是否开启该人格自己的 Web 控制台和端口。 |
+| `followup_first_sec` / `followup_repeat_sec` | 首次追问和再次追问的随机等待区间，单位秒。 |
 
-模型、语音、embedding、记忆窗口等完整配置见 `config-template.json` 与 `docs/`。
+## 启动
 
-## ⚠️ 平台限制
+```powershell
+# 默认人格，读取 config.json
+shenzhi start
 
-- **Telegram**：每个人格需在 @BotFather 创建独立 bot；中国大陆网络需自备代理
-- **微信**：ilink bot 与**第一个扫码的微信号永久 1:1 绑定**；不支持发送语音气泡。微信流量已强制直连（无视 `HTTP_PROXY` 等环境代理），与 Telegram 的代理互不干扰
-- **人设修改**：AGENT.md / USER.md / config 改动需重启该实例生效（主控端有"保存并重启"）
+# 指定人格实例
+shenzhi start --instance chenfeng
+shenzhi start --instance haiyang
 
-## 📄 许可与致谢
+# 主控端
+shenzhi master
+```
 
-[MIT License](LICENSE)。基于 [zhayujie/CowAgent](https://github.com/zhayujie/CowAgent) 开发，
-保留原作者版权声明；Agent 框架、渠道接入、Web 控制台等基础能力来自上游项目，特此致谢。
+常用命令：
+
+```powershell
+shenzhi start|stop|restart|status|logs [--instance <name>]
+shenzhi master [--port 9990] [--stop]
+```
+
+主控端适合日常使用：打开后可点卡片启动/停止人格、扫码登录微信、查看日志、编辑配置、备份/直接删除人格、从备份加载人格。
+
+## 人格目录
+
+运行时人格数据默认在 `~/cow/personas/{id}/`：
+
+```text
+~/cow/personas/{id}/
+├── AGENT.md        # 人设、背景故事、说话风格、few-shot
+├── USER.md         # 用户画像和相处规则
+├── MEMORY.md       # 长期事实记忆
+├── PROFILE.json    # 结构化个性化档案
+└── memory/         # 原始对话、日记、向量索引等运行数据
+```
+
+修改 `AGENT.md`、`USER.md`、`PROFILE.json` 或配置文件后，需要重启对应实例才会生效。`tasks.json` 这类调度任务支持热加载。
+
+## 记忆机制
+
+沈知不是把所有历史对话都塞进 prompt。当前分为四层：
+
+| 层级 | 用途 |
+|---|---|
+| 工作上下文 | 最近若干轮对话直接进入 prompt。 |
+| 原文对话库 | 每条消息即时写入 SQLite，需要核对原话时搜索并读取上下文。 |
+| 每日整合 | 定时把当天对话蒸馏成日记；漏跑会在下次启动补做。 |
+| 长期记忆 | `MEMORY.md` 保存稳定事实、偏好和关系变化，每轮都会注入。 |
+
+因此它可以保存原始对话并在需要时检索，但不会在每轮都把全部历史逐字发送给模型。这样更稳定，也更省 token。
+
+## 主控端说明
+
+`shenzhi master` 是这个项目的核心操作入口：
+
+- 首页展示所有人格卡片、渠道、模型、追问间隔和运行状态。
+- 新建人格分为“人格与故事”和“运行配置”两部分，减少一页表单过载。
+- 新建/编辑表单支持关系、性格、说话风格、相处规则的快捷标签和自定义标签。
+- 一键生成人设素材时，页面会要求用户填写生成 API base、key 和模型；这些配置不会从环境变量偷取。
+- 编辑人格分为运行配置、个性档案、原始人设三页，顶部标签可直接切换。
+- 删除人格时可选择“备份后删除”或“直接删除”；备份人格可从主控端重新加载。
+
+## 平台限制
+
+- Telegram：每个人格建议使用独立 BotFather token；部分网络环境需要代理。
+- 微信：ilink bot 与首次扫码的微信号长期绑定；不同人格要使用不同 `weixin_credentials_path`。
+- Web：最适合先验证模型、人格和记忆逻辑，不需要外部 bot token。
+- 模型：`bot_type` 和 `model` 必须匹配，换模型后要重启实例。
+
+## 开发与提交
+
+真实配置和运行数据已经被 `.gitignore` 排除，包括 `config.json`、`config-*.json`、日志、pid、备份和本地记忆数据库。提交前建议检查：
+
+```powershell
+git status --short
+git diff --check
+python -m pytest tests/test_message_splitter.py tests/test_monologue_filter.py -q
+```
+
+## 许可
+
+MIT License。基础框架来自 [CowAgent](https://github.com/zhayujie/CowAgent)，本仓库保留原项目许可和致谢。

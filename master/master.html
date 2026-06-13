@@ -5,42 +5,69 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>沈知 · 主控端</title>
 <style>
-:root{--bg:#0f1217;--card:#171c24;--card2:#1e2530;--line:#2a3342;--text:#e6ebf2;--dim:#8b97a8;--acc:#7c9cff;--ok:#3ecf8e;--bad:#5b6678;--warn:#f0b35e;--danger:#e06c75}
+:root{--bg:#f7efe6;--card:#fffaf3;--card2:#f2dfcf;--line:#dec6b4;--text:#3b281f;--dim:#8c7162;--acc:#b86d58;--acc2:#e8b48a;--ok:#31d768;--bad:#b48a75;--warn:#b97845;--danger:#9c4d41;--blue:#76abd0;--shadow:0 18px 38px rgba(87,54,36,.16)}
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:"Segoe UI","Microsoft YaHei",sans-serif;min-height:100vh}
-header{display:flex;align-items:center;gap:14px;padding:18px 28px;border-bottom:1px solid var(--line)}
-header h1{font-size:20px;font-weight:600}
-header .badge{margin-left:auto;background:var(--card2);border:1px solid var(--line);border-radius:20px;padding:6px 16px;font-size:13px;color:var(--dim)}
+body{background:linear-gradient(180deg,#fbf5ec 0%,#f7efe6 46%,#f1e2d4 100%);color:var(--text);font-family:"Segoe UI","Microsoft YaHei",sans-serif;min-height:100vh;position:relative;overflow-x:hidden}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;background:linear-gradient(90deg,rgba(255,255,255,.55),rgba(255,255,255,0) 26%,rgba(255,255,255,.38) 70%,rgba(255,255,255,.1)),repeating-linear-gradient(115deg,rgba(91,57,39,.025) 0 1px,transparent 1px 18px);opacity:.9}
+header{position:relative;display:flex;align-items:center;gap:14px;padding:18px 28px;border-bottom:1px solid rgba(118,82,61,.14);background:rgba(255,250,243,.68);backdrop-filter:blur(12px)}
+header h1{font-size:20px;font-weight:700;color:#5b372d}
+header .badge{margin-left:auto;background:#edf8ed;border:1px solid #d5ebd4;border-radius:20px;padding:6px 16px;font-size:13px;color:#477047;box-shadow:0 8px 18px rgba(72,146,74,.12)}
 header .badge b{color:var(--ok)}
-.wrap{max-width:1080px;margin:0 auto;padding:26px 20px 60px}
-.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
-.toolbar h2{font-size:15px;color:var(--dim);font-weight:500}
-button{cursor:pointer;border:1px solid var(--line);background:var(--card2);color:var(--text);border-radius:8px;padding:7px 14px;font-size:13px;transition:.15s}
-button:hover{border-color:var(--acc);color:var(--acc)}
-button.primary{background:var(--acc);border-color:var(--acc);color:#0d1117;font-weight:600}
-button.primary:hover{opacity:.9;color:#0d1117}
+.wrap{position:relative;max-width:1480px;margin:0 auto;padding:26px 28px 78px;min-height:calc(100vh - 67px)}
+.dashboard{display:block;min-height:640px}
+.main-panel{max-width:1120px;margin:0 auto;min-width:0}
+.toolbar{display:flex;justify-content:space-between;align-items:center;margin:10px 0 34px}
+.toolbar h2{font-size:18px;color:#3f271f;font-weight:700}
+.toolbar-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button{cursor:pointer;border:1px solid var(--line);background:rgba(255,250,243,.74);color:var(--text);border-radius:8px;padding:7px 14px;font-size:13px;transition:.15s;box-shadow:0 8px 18px rgba(86,52,35,.08)}
+button:hover{border-color:var(--acc);color:var(--acc);transform:translateY(-1px)}
+button.primary{background:linear-gradient(180deg,#c9846f,#ad5f4d);border-color:#b46754;color:#fff;font-weight:600;box-shadow:0 12px 24px rgba(174,89,70,.26)}
+button.primary:hover{opacity:.95;color:#fff}
 button.danger:hover{border-color:var(--danger);color:var(--danger)}
 button:disabled{opacity:.4;cursor:not-allowed}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
-.card .top{display:flex;align-items:center;gap:10px;margin-bottom:10px}
-.dot{width:10px;height:10px;border-radius:50%;background:var(--bad);flex-shrink:0}
+.grid{display:grid;grid-template-columns:repeat(3,260px);justify-content:space-between;gap:48px}
+.card{background:rgba(255,250,243,.92);border:1px solid rgba(150,104,77,.24);border-radius:8px;padding:14px;box-shadow:var(--shadow);position:relative}
+.card:after{content:"";position:absolute;inset:8px;border:1px solid rgba(190,143,115,.16);border-radius:6px;pointer-events:none}
+.portrait{height:180px;border:1px solid rgba(169,112,86,.32);border-radius:8px;overflow:hidden;background:linear-gradient(145deg,hsl(var(--avatar-hue,18) 58% 82%),#f8eadf 56%,hsl(calc(var(--avatar-hue,18) + 22) 46% 76%));display:flex;align-items:center;justify-content:center;margin-bottom:12px;position:relative}
+.portrait img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.avatar-fallback{font-size:52px;font-weight:700;color:#8f5948;text-shadow:0 2px 0 rgba(255,255,255,.45)}
+.card .top{display:flex;align-items:flex-end;gap:8px;margin-bottom:9px;position:relative;z-index:1}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--bad);flex-shrink:0;margin-left:auto;margin-bottom:6px}
 .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
-.card h3{font-size:17px;font-weight:600}
-.card .id{color:var(--dim);font-size:12px}
-.tag{display:inline-block;background:var(--card2);border:1px solid var(--line);border-radius:5px;padding:2px 8px;font-size:11.5px;color:var(--dim);margin:2px 4px 2px 0}
-.tag.hl{color:var(--warn);border-color:var(--warn)}
-.meta{font-size:12.5px;color:var(--dim);margin:8px 0 12px;line-height:1.8}
-.btns{display:flex;flex-wrap:wrap;gap:8px}
-.btns button{padding:6px 12px;font-size:12.5px}
+.card h3{font-size:22px;font-weight:700;letter-spacing:0;color:#3d281f;line-height:1}
+.card .id{color:var(--dim);font-size:12px;margin-bottom:1px}
+.tags{min-height:28px;position:relative;z-index:1}
+.tag{display:inline-block;background:#ead9c6;border:1px solid rgba(160,115,88,.2);border-radius:6px;padding:3px 9px;font-size:12px;color:#5d3b2f;margin:2px 5px 2px 0}
+.tag.channel-telegram{background:#d5eafd;color:#255875}
+.tag.channel-weixin{background:#bff1c8;color:#246b38}
+.tag.channel-web{background:#ecd9bd;color:#6c4a25}
+.tag.hl{color:#8a4e22;border-color:#d7a06b;background:#fff1db}
+.meta{font-size:13px;color:#3f2c22;margin:8px 0 12px;line-height:1.85;position:relative;z-index:1}
+.meta-row{display:block}
+.btns{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;position:relative;z-index:1}
+.btns button{padding:7px 4px;font-size:12px;background:#f4e6d8;border-color:#d6bba6;color:#4b3027;box-shadow:0 8px 16px rgba(95,57,35,.09)}
+.btns button.primary{background:linear-gradient(180deg,#c9846f,#ad5f4d);color:#fff;border-color:#ad5f4d}
+.btns button.danger{background:#fff2ed;color:#88483d;border-color:#d7b4aa}
+.activity-panel{position:fixed;left:28px;bottom:176px;width:180px;background:rgba(255,250,243,.88);border:1px solid rgba(150,104,77,.22);border-radius:8px;padding:14px;box-shadow:0 14px 28px rgba(87,54,36,.12);z-index:1}
+.activity-panel h3{font-size:15px;margin-bottom:10px;color:#4b3027}
+.activity-panel ul{list-style:none;border-top:1px solid rgba(133,92,68,.18);padding-top:9px}
+.activity-panel li{display:flex;align-items:center;gap:8px;color:#5c4033;font-size:12.5px;line-height:1.5;margin:8px 0}
+.activity-dot{width:8px;height:8px;border-radius:50%;background:#b78b73;flex-shrink:0}
+.activity-dot.blue{background:#7ea8c8}
+.note-card{display:none;position:absolute;width:122px;min-height:126px;border:1px solid rgba(161,118,89,.22);background:rgba(255,250,243,.74);box-shadow:0 12px 24px rgba(87,54,36,.12);border-radius:8px;padding:14px;font-size:12px;line-height:1.65;color:#5b4032}
+.note-card.one{left:37%;top:212px}
+.note-card.two{right:19%;top:258px}
+.note-card:before{content:"";display:block;height:34px;margin-bottom:8px;border-radius:6px;background:linear-gradient(135deg,rgba(185,109,88,.2),rgba(255,250,243,.7))}
+.site-footer{position:fixed;left:0;right:0;bottom:0;height:36px;background:linear-gradient(90deg,#22242b,#3d281f);color:rgba(255,250,243,.45);display:flex;align-items:center;justify-content:center;font-size:12px;z-index:2}
+.site-footer .right{position:absolute;right:22px}
 /* modal */
-.mask{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10;align-items:flex-start;justify-content:center;overflow:auto;padding:40px 16px}
+.mask{display:none;position:fixed;inset:0;background:rgba(59,40,31,.36);z-index:10;align-items:flex-start;justify-content:center;overflow:auto;padding:40px 16px}
 .mask.show{display:flex}
-.modal{background:var(--card);border:1px solid var(--line);border-radius:14px;width:760px;max-width:100%;padding:24px}
+.modal{background:rgba(255,250,243,.98);border:1px solid var(--line);border-radius:8px;width:760px;max-width:100%;padding:24px;box-shadow:var(--shadow)}
 .modal h3{margin-bottom:16px;font-size:17px}
 .modal .row{display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap}
 .modal label{display:block;font-size:12.5px;color:var(--dim);margin-bottom:5px}
-.modal input[type=text],.modal input[type=password],.modal input[type=number],.modal textarea,.modal select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;font-family:inherit}
+.modal input[type=text],.modal input[type=password],.modal input[type=number],.modal textarea,.modal select{width:100%;background:#fffdf8;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;font-family:inherit}
 .modal textarea{resize:vertical;line-height:1.6}
 .modal textarea.md{font-family:Consolas,monospace;font-size:12.5px}
 .modal input[type=range]{width:100%;accent-color:var(--acc)}
@@ -50,12 +77,60 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .checks label{display:flex;align-items:center;gap:6px;color:var(--text);font-size:13px;cursor:pointer}
 .tabs{display:flex;gap:6px;margin-bottom:16px}
 .tabs button.on{background:var(--acc);color:#0d1117;border-color:var(--acc);font-weight:600}
+.create-tabs-row{display:flex;align-items:flex-start;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.create-tabs-row .tabs{margin-bottom:0;flex-shrink:0}
+.generator-config{flex:1;min-width:320px;display:grid;grid-template-columns:1fr 1.2fr 1.2fr;gap:8px}
+.generator-config label{font-size:12px}
+.generator-config input{padding:7px 9px}
+.create-modal{width:820px}
+.create-steps{display:flex;gap:8px;margin:0 0 16px}
+.create-step{flex:1;border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--dim);font-size:12.5px}
+button.create-step{text-align:left;background:transparent;box-shadow:none}
+.create-step b{display:block;color:var(--text);font-size:13px;margin-bottom:2px}
+.create-step.on{border-color:var(--acc);background:rgba(124,156,255,.08)}
+.create-page-title{font-size:13px;color:var(--text);font-weight:600;margin:4px 0 12px}
+.choice-panel{background:rgba(244,230,216,.62);border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:8px}
+.choice-title{font-size:12px;color:var(--dim);margin-bottom:6px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border-radius:6px;padding:5px 8px;font-size:12px}
+.custom-choice{display:flex;gap:6px;margin-top:8px}
+.custom-choice input{min-width:0}
+.generate-box{display:flex;align-items:center;justify-content:space-between;gap:12px;background:rgba(232,180,138,.16);border:1px solid rgba(184,109,88,.28);border-radius:8px;padding:12px;margin:4px 0 12px}
+.generate-box b{display:block;font-size:13px;margin-bottom:2px}
+.generate-box .hint{margin:0}
+.generate-box button{white-space:nowrap}
+.option-cards{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.modal label.option-card{display:flex;align-items:flex-start;gap:8px;background:rgba(244,230,216,.62);border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--text);cursor:pointer}
+.option-card input{margin-top:3px}
+.option-card b{display:block;font-size:13px;margin-bottom:3px}
+.option-card span{display:block;font-size:12px;color:var(--dim);line-height:1.55}
+.backup-list{display:grid;gap:8px;max-height:360px;overflow:auto;margin:12px 0}
+.backup-item{width:100%;text-align:left;background:rgba(255,253,248,.86);border:1px solid var(--line);border-radius:8px;padding:10px 12px;box-shadow:none}
+.backup-item.on{border-color:var(--acc);background:rgba(232,180,138,.22)}
+.backup-item b{display:block;font-size:14px;margin-bottom:4px}
+.backup-meta{font-size:12px;color:var(--dim);line-height:1.6}
+.empty-state{border:1px dashed var(--line);border-radius:8px;padding:18px;text-align:center;color:var(--dim);font-size:13px}
 .foot{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
 .hint{font-size:12px;color:var(--dim);line-height:1.7;margin-top:4px}
-#toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:var(--card2);border:1px solid var(--acc);border-radius:10px;padding:10px 22px;font-size:13.5px;display:none;z-index:99;max-width:80vw}
+#toast{position:fixed;bottom:48px;left:50%;transform:translateX(-50%);background:#fffaf3;border:1px solid var(--acc);border-radius:8px;padding:10px 22px;font-size:13.5px;display:none;z-index:99;max-width:80vw;box-shadow:var(--shadow)}
 #qrbox{text-align:center}
 #qrbox img{width:260px;height:260px;border-radius:10px;background:#fff;padding:8px;margin:10px 0}
-pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:11.5px;line-height:1.55;max-height:480px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#aeb8c6}
+pre.log{background:#fffdf8;border:1px solid var(--line);border-radius:8px;padding:12px;font-size:11.5px;line-height:1.55;max-height:480px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#5c4638}
+@media (max-width:900px){
+  .wrap{padding:20px 16px 76px;min-height:auto}
+  .dashboard{min-height:auto}
+  .main-panel{max-width:none}
+  .activity-panel{position:static;width:auto;margin-top:20px}
+  .toolbar{align-items:flex-start;gap:12px;flex-direction:column}
+  .grid{grid-template-columns:repeat(auto-fit,minmax(230px,1fr));justify-content:stretch}
+  .option-cards{grid-template-columns:1fr}
+  .note-card{display:none}
+}
+@media (min-width:901px) and (max-width:1220px){
+  .main-panel{max-width:860px}
+  .grid{grid-template-columns:repeat(3,240px);gap:24px}
+  .activity-panel{left:18px;width:156px}
+}
 </style>
 </head>
 <body>
@@ -64,74 +139,78 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
   <div class="badge">运行中 <b id="run-count">0</b> / <span id="max-count">3</span></div>
 </header>
 <div class="wrap">
-  <div class="toolbar">
-    <h2>人格实例（一个人格 = 独立人设 + 独立记忆 + 独立 bot 进程）</h2>
-    <div style="display:flex;gap:8px">
-      <button onclick="bulk('start_all')">▶ 全部启动</button>
-      <button class="danger" onclick="bulk('stop_all')">■ 全部停止</button>
-      <button class="primary" onclick="openCreate()">＋ 新建人格</button>
+  <div class="note-card one">散步时会记得你的习惯，一起把日子过成连续的故事。</div>
+  <div class="note-card two">说起来像熟人，落笔像真正陪在身边。</div>
+  <div class="dashboard">
+    <aside class="activity-panel">
+      <h3>陪伴互动</h3>
+      <ul id="activity-list"></ul>
+    </aside>
+    <div class="main-panel">
+      <div class="toolbar">
+        <h2>个性化伴侣（每个人格 = 独立人设 + 记忆 + Bot）</h2>
+        <div class="toolbar-actions">
+          <button onclick="bulk('start_all')">▶ 全部启动</button>
+          <button class="danger" onclick="bulk('stop_all')">■ 全部停止</button>
+          <button onclick="openRestorePersona()">↺ 加载备份人格</button>
+          <button class="primary" onclick="openCreate()">＋ 新建人格</button>
+        </div>
+      </div>
+      <div class="grid" id="grid"></div>
     </div>
   </div>
-  <div class="grid" id="grid"></div>
 </div>
+<div class="site-footer"><span>沈知 · 主控端 · 个性化伴侣</span><span class="right">首页 | 记录 | 更新</span></div>
 
 <!-- 新建人格 -->
 <div class="mask" id="m-create">
-  <div class="modal">
+  <div class="modal create-modal">
     <h3>新建人格</h3>
-    <div class="row">
-      <div class="f1"><label>人格 ID（小写英文，作为目录与配置名）</label><input type="text" id="c-id" placeholder="如 chenfeng"></div>
-      <div class="f1"><label>渠道（至少一个）</label>
-        <div class="checks">
-          <label><input type="checkbox" id="c-ch-weixin"> 微信</label>
-          <label><input type="checkbox" id="c-ch-telegram"> Telegram</label>
-          <label><input type="checkbox" id="c-ch-web"> Web</label>
+    <div class="create-steps">
+      <div id="create-step-persona" class="create-step on"><b>1. 人格与故事</b>先写关系、人设、背景和用户档案</div>
+      <div id="create-step-runtime" class="create-step"><b>2. 运行配置</b>再设置模型、渠道和追问节奏</div>
+    </div>
+
+    <div id="create-page-persona">
+      <div class="create-page-title">人格基础</div>
+      <div class="row">
+        <div class="f1"><label>人格 ID（小写英文，作为目录与配置名）</label><input type="text" id="c-id" placeholder="如 chenfeng"></div>
+        <div class="f1"><label>AI 名字 / 显示名</label><input type="text" id="c-bot" placeholder="如 潮汐"></div>
+        <div class="f1"><label>从模板开始（可选）</label><select id="c-template" onchange="templateChange()"><option value="">空白人格</option></select></div>
+      </div>
+      <div class="create-tabs-row">
+        <div class="tabs">
+          <button id="tab-form" class="on" onclick="setTab('form')">引导表单</button>
+          <button id="tab-raw" onclick="setTab('raw')">直接编辑 Markdown</button>
+        </div>
+        <div class="generator-config">
+          <div><label>生成模型</label><input type="text" id="c-gen-model" placeholder="mimo-v2.5"></div>
+          <div><label>生成 API Base</label><input type="text" id="c-gen-base" placeholder="https://token-plan-cn.xiaomimimo.com/v1"></div>
+          <div><label>生成 API Key</label><input type="password" id="c-gen-key" placeholder="tp-..."></div>
         </div>
       </div>
-    </div>
-    <div class="row">
-      <div class="f1"><label>从模板开始（可选）</label><select id="c-template" onchange="templateChange()"><option value="">空白人格</option></select></div>
-    </div>
-    <div class="row" id="c-tg-row" style="display:none">
-      <div class="f1"><label>Telegram bot token（@BotFather 创建，每个人格一个独立 bot）</label><input type="password" id="c-tg-token" placeholder="123456:ABC-..."></div>
-    </div>
-    <div class="row">
-      <div class="f1"><label>追问等待 · 最小（分钟）</label><input type="number" id="c-fmin" value="180"></div>
-      <div class="f1"><label>追问等待 · 最大（分钟）</label><input type="number" id="c-fmax" value="240"></div>
-      <div class="f1"><label>追问次数上限（0 = 不限）</label><input type="number" id="c-fcount" value="0" min="0"></div>
-    </div>
-    <div class="row">
-      <div class="f1"><label>模型厂商（留空 = 继承默认配置）</label><select id="c-mprov" onchange="provChange('c')"><option value="">继承默认配置</option></select></div>
-      <div class="f1"><label>模型名</label><input type="text" id="c-mname" placeholder="先选厂商"></div>
-    </div>
-    <div class="row" id="c-mapi-row" style="display:none">
-      <div class="f1"><label id="c-mkey-label">API Key（留空 = 用默认配置里的 key）</label><input type="password" id="c-mkey" placeholder="sk-..."></div>
-      <div class="f1" id="c-mbase-box"><label>API Base（可选，留空用官方地址）</label><input type="text" id="c-mbase" placeholder="https://..."></div>
-    </div>
-    <div class="row">
-      <div class="f1"><label>语音识别</label><select id="c-v2t"><option value="">继承默认配置</option></select></div>
-      <div class="f1"><label>语音合成</label><select id="c-t2v"><option value="">继承默认配置</option></select></div>
-      <div class="f1"><label>音色 ID（如 Serena）</label><input type="text" id="c-tts" placeholder="留空继承"></div>
-      <div class="f1"><label>语音回复（微信 ilink 发不了语音气泡）</label><select id="c-vrep"><option value="">继承默认配置</option><option value="on">开启</option><option value="off">关闭</option></select></div>
-    </div>
-    <div class="row">
-      <div class="f1"><label>图像生成厂商</label><select id="c-imgp"><option value="">继承默认配置</option></select></div>
-      <div class="f1"><label>图像生成模型</label><input type="text" id="c-imgm" placeholder="如 qwen-image / gemini-2.5-flash-image，留空继承"></div>
-    </div>
-    <div class="tabs">
-      <button id="tab-form" class="on" onclick="setTab('form')">引导表单</button>
-      <button id="tab-raw" onclick="setTab('raw')">直接编辑 Markdown</button>
-    </div>
-    <div id="pane-form">
+      <div id="pane-form">
+        <div class="create-page-title">人设与故事</div>
       <div class="row">
-        <div class="f1"><label>AI 名字</label><input type="text" id="c-bot" placeholder="如 晨风"></div>
         <div class="f1"><label>用户名字</label><input type="text" id="c-user" placeholder="如 用户A"></div>
-        <div class="f1"><label>关系（AI 是用户的——）</label><input type="text" id="c-rel" placeholder="如 青梅竹马 / 女朋友"></div>
+        <div class="f1">
+          <label>关系（AI 是用户的——）</label>
+          <input type="text" id="c-rel" placeholder="如 青梅竹马 / 女朋友">
+          <div class="choice-panel" id="c-rel-choices"></div>
+        </div>
       </div>
       <div class="row"><div class="f1"><label>背景故事（两人怎么认识、现在的生活）</label><textarea id="c-bg" rows="4"></textarea></div></div>
       <div class="row">
-        <div class="f1"><label>AI 性格（一行一条）</label><textarea id="c-pers" rows="4" placeholder="- 外冷内热&#10;- 话少，主意正"></textarea></div>
-        <div class="f1"><label>说话风格（一行一条）</label><textarea id="c-style" rows="4" placeholder="短句，肯定句&#10;称呼他全名"></textarea></div>
+        <div class="f1">
+          <label>AI 性格（一行一条）</label>
+          <textarea id="c-pers" rows="4" placeholder="- 外冷内热&#10;- 话少，主意正"></textarea>
+          <div class="choice-panel" id="c-pers-choices"></div>
+        </div>
+        <div class="f1">
+          <label>说话风格（一行一条）</label>
+          <textarea id="c-style" rows="4" placeholder="短句，肯定句&#10;称呼他全名"></textarea>
+          <div class="choice-panel" id="c-style-choices"></div>
+        </div>
       </div>
       <div class="row">
         <div class="f1"><label>表情使用</label>
@@ -143,16 +222,76 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
           </div>
         </div>
       </div>
+      <div class="generate-box">
+        <div>
+          <b>一键生成剩余内容</b>
+          <p class="hint">填好 AI 名字、用户名字、关系、表情、性格和说话风格后，自动补全背景故事、对话示例、用户档案和相处规则。</p>
+        </div>
+        <button type="button" class="primary" id="c-generate" onclick="generatePersonaDraft()">一键生成</button>
+      </div>
       <div class="row"><div class="f1"><label>对话示例（可选，few-shot 对语气影响最大；格式：一行用户说，一行 AI 回，AI 多句用 [MSG] 分隔）</label><textarea id="c-few" rows="4"></textarea></div></div>
       <div class="row"><div class="f1"><label>用户档案（工作、性格、作息等，注入给 AI 了解用户）</label><textarea id="c-uprof" rows="4"></textarea></div></div>
-      <div class="row"><div class="f1"><label>相处规则（可选）</label><textarea id="c-urule" rows="2"></textarea></div></div>
+      <div class="row">
+        <div class="f1">
+          <label>相处规则（可选）</label>
+          <textarea id="c-urule" rows="2"></textarea>
+          <div class="choice-panel" id="c-urule-choices"></div>
+        </div>
+      </div>
+      </div>
+      <div id="pane-raw" style="display:none">
+        <div class="row"><div class="f1"><label>AGENT.md（AI 人设全文）</label><textarea id="c-agent" class="md" rows="14"></textarea></div></div>
+        <div class="row"><div class="f1"><label>USER.md（用户设定全文）</label><textarea id="c-userm" class="md" rows="8"></textarea></div></div>
+      </div>
     </div>
-    <div id="pane-raw" style="display:none">
-      <div class="row"><div class="f1"><label>AGENT.md（AI 人设全文）</label><textarea id="c-agent" class="md" rows="14"></textarea></div></div>
-      <div class="row"><div class="f1"><label>USER.md（用户设定全文）</label><textarea id="c-userm" class="md" rows="8"></textarea></div></div>
+
+    <div id="create-page-runtime" style="display:none">
+      <div class="create-page-title">渠道与追问</div>
+      <div class="row">
+        <div class="f1"><label>渠道（至少一个）</label>
+          <div class="checks">
+            <label><input type="checkbox" id="c-ch-weixin"> 微信</label>
+            <label><input type="checkbox" id="c-ch-telegram"> Telegram</label>
+            <label><input type="checkbox" id="c-ch-web"> Web</label>
+          </div>
+        </div>
+      </div>
+      <div class="row" id="c-tg-row" style="display:none">
+        <div class="f1"><label>Telegram bot token（@BotFather 创建，每个人格一个独立 bot）</label><input type="password" id="c-tg-token" placeholder="123456:ABC-..."></div>
+      </div>
+      <div class="row">
+        <div class="f1"><label>追问等待 · 最小（分钟）</label><input type="number" id="c-fmin" value="180"></div>
+        <div class="f1"><label>追问等待 · 最大（分钟）</label><input type="number" id="c-fmax" value="240"></div>
+        <div class="f1"><label>追问次数上限（0 = 不限）</label><input type="number" id="c-fcount" value="0" min="0"></div>
+      </div>
+
+      <div class="create-page-title">模型与媒体</div>
+      <div class="row">
+        <div class="f1"><label>模型厂商（留空 = 继承默认配置）</label><select id="c-mprov" onchange="provChange('c')"><option value="">继承默认配置</option></select></div>
+        <div class="f1"><label>模型名</label><input type="text" id="c-mname" placeholder="先选厂商"></div>
+      </div>
+      <div class="row" id="c-mapi-row" style="display:none">
+        <div class="f1"><label id="c-mkey-label">API Key（留空 = 用默认配置里的 key）</label><input type="password" id="c-mkey" placeholder="sk-..."></div>
+        <div class="f1" id="c-mbase-box"><label>API Base（可选，留空用官方地址）</label><input type="text" id="c-mbase" placeholder="https://..."></div>
+      </div>
+      <div class="row">
+        <div class="f1"><label>语音识别</label><select id="c-v2t"><option value="">继承默认配置</option></select></div>
+        <div class="f1"><label>语音合成</label><select id="c-t2v"><option value="">继承默认配置</option></select></div>
+        <div class="f1"><label>音色 ID（如 Serena）</label><input type="text" id="c-tts" placeholder="留空继承"></div>
+        <div class="f1"><label>语音回复（微信 ilink 发不了语音气泡）</label><select id="c-vrep"><option value="">继承默认配置</option><option value="on">开启</option><option value="off">关闭</option></select></div>
+      </div>
+      <div class="row">
+        <div class="f1"><label>图像生成厂商</label><select id="c-imgp"><option value="">继承默认配置</option></select></div>
+        <div class="f1"><label>图像生成模型</label><input type="text" id="c-imgm" placeholder="如 qwen-image / gemini-2.5-flash-image，留空继承"></div>
+      </div>
     </div>
     <p class="hint">创建后会生成 personas/{id}/ 人设目录与 config-{id}.json 实例配置（模型与 key 继承当前默认配置，可到该实例自己的 Web 控制台再调）。微信渠道首次启动需目标用户扫码登录。</p>
-    <div class="foot"><button onclick="hide('m-create')">取消</button><button class="primary" onclick="submitCreate()">创建</button></div>
+    <div class="foot">
+      <button onclick="hide('m-create')">取消</button>
+      <button id="create-prev" onclick="setCreateStep(1)" style="display:none">上一步</button>
+      <button id="create-next" class="primary" onclick="nextCreateStep()">下一步：运行配置</button>
+      <button id="create-submit" class="primary" onclick="submitCreate()" style="display:none">创建</button>
+    </div>
   </div>
 </div>
 
@@ -160,6 +299,12 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
 <div class="mask" id="m-edit">
   <div class="modal">
     <h3 id="e-title">编辑人格</h3>
+    <div class="create-steps">
+      <button type="button" id="edit-step-runtime" class="create-step on" onclick="setEditStep(1)"><b>1. 运行配置</b>渠道、模型、追问和媒体</button>
+      <button type="button" id="edit-step-profile" class="create-step" onclick="setEditStep(2)"><b>2. 个性档案</b>称呼、风格、边界和主动关怀</button>
+      <button type="button" id="edit-step-markdown" class="create-step" onclick="setEditStep(3)"><b>3. 原始人设</b>AGENT.md 与 USER.md</button>
+    </div>
+    <div id="edit-page-runtime">
     <div class="row">
       <div class="f1"><label>渠道</label>
         <div class="checks">
@@ -195,6 +340,9 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
       <div class="f1"><label id="e-imgm-label">图像生成模型</label><input type="text" id="e-imgm" placeholder="不修改请留空"></div>
     </div>
     <div class="row"><div class="f1"><label>Telegram bot token（留空 = 不修改）</label><input type="password" id="e-tg-token" placeholder="不修改请留空"></div></div>
+    </div>
+
+    <div id="edit-page-profile" style="display:none">
     <div class="section-title">结构化个性化档案（保存后重启生效）</div>
     <div class="row">
       <div class="f1">
@@ -236,11 +384,17 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
       <div class="f1"><label>Web 风格差异</label><input type="text" id="e-p-web" placeholder="如 可稍微完整一些"></div>
     </div>
     <div class="row"><div class="f1"><label>其他个性化偏好（一行一条）</label><textarea id="e-p-notes" rows="3"></textarea></div></div>
+    </div>
+
+    <div id="edit-page-markdown" style="display:none">
     <div class="row"><div class="f1"><label>AGENT.md（AI 人设）</label><textarea id="e-agent" class="md" rows="16"></textarea></div></div>
     <div class="row"><div class="f1"><label>USER.md（用户设定）</label><textarea id="e-user" class="md" rows="9"></textarea></div></div>
+    </div>
     <p class="hint">人设与配置改动需重启实例后生效（约 10 秒，仅影响该人格）。</p>
     <div class="foot">
       <button onclick="hide('m-edit')">取消</button>
+      <button id="edit-prev" onclick="moveEditStep(-1)" style="display:none">上一步</button>
+      <button id="edit-next" onclick="moveEditStep(1)">下一步</button>
       <button onclick="submitEdit(false)">仅保存</button>
       <button class="primary" onclick="submitEdit(true)">保存并重启</button>
     </div>
@@ -266,6 +420,47 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
   </div>
 </div>
 
+<!-- 删除人格 -->
+<div class="mask" id="m-delete">
+  <div class="modal" style="width:560px">
+    <h3 id="delete-title">删除人格</h3>
+    <p class="hint">运行中的人格不能删除。删除会移除该人格的人设、记忆、配置和日志入口；可选择先保存一份完整人格备份。</p>
+    <div class="option-cards">
+      <label class="option-card">
+        <input type="radio" name="delete-mode" value="backup" checked>
+        <span><b>备份后删除</b>先生成完整人格 zip，可从“加载备份人格”恢复。</span>
+      </label>
+      <label class="option-card">
+        <input type="radio" name="delete-mode" value="direct">
+        <span><b>直接删除</b>不生成新备份，现有旧备份不会被改动。</span>
+      </label>
+    </div>
+    <div class="row"><div class="f1"><label id="delete-confirm-label">输入人格 ID 确认删除</label><input type="text" id="delete-confirm"></div></div>
+    <div class="foot">
+      <button onclick="hide('m-delete')">取消</button>
+      <button class="danger" onclick="submitDeletePersona()">确认删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- 加载备份人格 -->
+<div class="mask" id="m-restore">
+  <div class="modal" style="width:680px">
+    <h3>加载备份人格</h3>
+    <p class="hint">这里只显示完整人格备份（`*-persona-*.zip`）。清记忆生成的 memory 备份不会出现在这里，因为它不能单独恢复成完整人格。</p>
+    <div id="restore-list" class="backup-list"></div>
+    <div class="row">
+      <div class="f1"><label>恢复为人格 ID（留空 = 使用备份里的原 ID）</label><input type="text" id="restore-target" placeholder="如 chaoxi"></div>
+    </div>
+    <p class="hint" id="restore-selected">请选择一个备份。</p>
+    <div class="foot">
+      <button onclick="loadPersonaBackups()">刷新</button>
+      <button onclick="hide('m-restore')">取消</button>
+      <button class="primary" onclick="submitRestorePersona()">加载备份</button>
+    </div>
+  </div>
+</div>
+
 <!-- 微信二维码 -->
 <div class="mask" id="m-qr">
   <div class="modal" style="width:380px">
@@ -287,7 +482,9 @@ pre.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padd
 <div id="toast"></div>
 <script>
 let state = {personas: []};
-let qrTimer = null, editId = null, clearId = null;
+let qrTimer = null, editId = null, clearId = null, deleteId = null, restoreFile = null;
+let createStep = 1;
+let editStep = 1;
 
 const $ = id => document.getElementById(id);
 const urlToken = new URLSearchParams(location.search).get('token') || '';
@@ -316,6 +513,121 @@ async function api(path, opt){
 }
 
 const CH_NAME = {weixin:'微信', telegram:'Telegram', web:'Web'};
+
+const CREATE_CHOICE_GROUPS = [
+  {
+    container:'c-rel-choices', field:'c-rel', mode:'single', title:'常用关系',
+    custom:'自定义关系',
+    items:['恋人','暧昧对象','青梅竹马','同居恋人','挚友','姐姐','妹妹','生活助理','同事搭子','虚拟偶像']
+  },
+  {
+    container:'c-pers-choices', field:'c-pers', mode:'append', title:'性格标签',
+    custom:'自定义性格', prefix:'- ',
+    items:[
+      '外冷内热，嘴上淡但行动很在意',
+      '亲近但不黏人，会自然撒娇',
+      '可靠稳重，话不多但一直在场',
+      '嘴硬心软，会轻轻吐槽用户',
+      '敏感细腻，能捕捉用户的小情绪',
+      '直球坦率，不绕弯也不端着',
+      '有边界感，不强行追问隐私',
+      '有自己的生活感和小脾气'
+    ]
+  },
+  {
+    container:'c-style-choices', field:'c-style', mode:'append', title:'说话风格',
+    custom:'自定义风格',
+    items:[
+      '短句，像微信聊天',
+      '先接情绪，再说事情',
+      '不讲大道理，不输出清单',
+      '偶尔用亲昵称呼，但不过度',
+      '会用 [MSG] 拆成几条自然短消息',
+      '熟人语气，可以轻微吐槽',
+      '回复克制，一次只说一件事',
+      '不说“好的，请问有什么可以帮你”'
+    ]
+  },
+  {
+    container:'c-urule-choices', field:'c-urule', mode:'append', title:'相处规则',
+    custom:'自定义规则', prefix:'- ',
+    items:[
+      '用户忙的时候只轻轻提醒一句，不连续追问',
+      '深夜少讲大道理，优先陪伴和安抚',
+      '不要反复问“为什么不回消息”',
+      '用户低落时先站在他这边，再慢慢聊原因',
+      '重要提醒要短，别像工作通知',
+      '不在普通聊天里自称 AI 或助手',
+      '不替用户做重大决定，只给温和建议',
+      '关系推进要自然，不突然变得过度亲密'
+    ]
+  }
+];
+
+function appendTextareaLine(id, line){
+  const el = $(id);
+  const next = (line || '').trim();
+  if(!el || !next) return;
+  const lines = (el.value || '').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+  if(!lines.includes(next)) lines.push(next);
+  el.value = lines.join('\n');
+}
+
+function applyCreateChoice(group, value){
+  const text = (value || '').trim();
+  if(!text) return;
+  if(group.mode === 'single'){
+    $(group.field).value = text;
+  } else {
+    appendTextareaLine(group.field, `${group.prefix || ''}${text}`);
+  }
+}
+
+function renderCreateChoices(){
+  for(const group of CREATE_CHOICE_GROUPS){
+    const root = $(group.container);
+    if(!root) continue;
+    root.innerHTML = '';
+    const title = document.createElement('div');
+    title.className = 'choice-title';
+    title.textContent = group.title;
+    root.appendChild(title);
+    const chips = document.createElement('div');
+    chips.className = 'chips';
+    for(const item of group.items){
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chip';
+      btn.textContent = item;
+      btn.addEventListener('click', ()=>applyCreateChoice(group, item));
+      chips.appendChild(btn);
+    }
+    root.appendChild(chips);
+    const custom = document.createElement('div');
+    custom.className = 'custom-choice';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = group.custom;
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.textContent = '添加';
+    const submit = ()=>{
+      applyCreateChoice(group, input.value);
+      input.value = '';
+      input.focus();
+    };
+    add.addEventListener('click', submit);
+    input.addEventListener('keydown', e=>{
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        submit();
+      }
+    });
+    custom.appendChild(input);
+    custom.appendChild(add);
+    root.appendChild(custom);
+  }
+}
 
 /* 模型厂商（数据来自 /api/overview 的 model_providers，单一来源在 master_app.py） */
 let editProviders = null; // 编辑弹窗：该实例各厂商 key 配置状态（来自 persona detail）
@@ -515,12 +827,56 @@ async function templateChange(){
   }
 }
 
+function escapeHtml(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, ch=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[ch]));
+}
+
+function formatSize(bytes){
+  const n = Number(bytes) || 0;
+  if(n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  if(n >= 1024) return `${Math.round(n / 1024)} KB`;
+  return `${n} B`;
+}
+
+function hashHue(s){
+  let h = 18;
+  for(const ch of String(s || '')) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return 12 + (h % 34);
+}
+
+function shortName(title, id){
+  const t = (title || id || '').trim();
+  return t ? Array.from(t)[0] : '?';
+}
+
+function channelTag(c){
+  return `<span class="tag channel-${c}">${CH_NAME[c]||escapeHtml(c)}</span>`;
+}
+
+function renderActivity(){
+  const list = $('activity-list');
+  if(!list) return;
+  const rows = [];
+  for(const p of state.personas.slice(0, 5)){
+    const cls = p.running ? '' : 'blue';
+    const text = p.running
+      ? `${p.title}正在沉思...`
+      : `${p.title}等待启动`;
+    rows.push(`<li><span class="activity-dot ${cls}"></span><span>${escapeHtml(text)}</span></li>`);
+  }
+  if(!rows.length) rows.push('<li><span class="activity-dot blue"></span><span>还没有人格</span></li>');
+  list.innerHTML = rows.join('');
+}
+
 function render(){
   $('run-count').textContent = state.running;
   $('max-count').textContent = state.max_running;
+  renderActivity();
   const g = $('grid'); g.innerHTML = '';
   for(const p of state.personas){
-    const chans = p.channels.map(c=>`<span class="tag">${CH_NAME[c]||c}</span>`).join('');
+    const chans = p.channels.map(channelTag).join('');
     const rng = s => `${Math.round(s[0]/60)}-${Math.round(s[1]/60)}`;
     let fu = '默认';
     if(p.followup_first_sec){
@@ -533,17 +889,27 @@ function render(){
     if(p.channels.includes('weixin') && p.weixin_logged_in === false) warn += `<span class="tag hl">微信未登录</span>`;
     if(p.channels.includes('telegram') && !p.telegram_token_set) warn += `<span class="tag hl">缺 TG token</span>`;
     if(!p.config_exists) warn += `<span class="tag hl">缺配置文件</span>`;
-    const consoleBtn = (p.web_console && p.running) ? `<button onclick="window.open('http://localhost:${p.web_port}','_blank')">控制台</button>` : '';
-    const qrBtn = p.weixin_qr_available ? `<button onclick="openQr('${p.id}')">微信二维码</button>` : '';
-    const runBtns = p.running
-      ? `<button class="danger" onclick="act('${p.id}','stop')">停止</button><button onclick="act('${p.id}','restart')">重启</button>`
-      : `<button class="primary" onclick="act('${p.id}','start')" ${state.running>=state.max_running?'disabled title="已达并行上限"':''}>启动</button>`;
+    const safeId = escapeHtml(p.id);
+    const avatar = p.avatar_url ? `<img src="${p.avatar_url}" alt="${escapeHtml(p.title)}" onerror="this.remove()">` : '';
+    const portrait = `<div class="portrait" style="--avatar-hue:${hashHue(p.id)}"><span class="avatar-fallback">${escapeHtml(shortName(p.title, p.id))}</span>${avatar}</div>`;
+    const runBtn = p.running
+      ? `<button class="danger" onclick="act('${safeId}','stop')">停止</button><button onclick="act('${safeId}','restart')">重启</button>`
+      : `<button class="primary" onclick="act('${safeId}','start')" ${state.running>=state.max_running?'disabled title="已达并行上限"':''}>启动</button>`;
+    const consoleBtn = (p.web_console && p.running) ? `<button onclick="window.open('http://localhost:${p.web_port}','_blank')">聊天</button>` : '';
+    const qrBtn = p.weixin_qr_available ? `<button onclick="openQr('${safeId}')">扫码</button>` : '';
+    const deleteBtn = p.is_default ? '' : `<button class="danger" onclick="openDeletePersona('${safeId}')">删除</button>`;
+    const defaultBadge = p.is_default ? '<span class="tag hl">default</span>' : '';
     g.insertAdjacentHTML('beforeend', `
       <div class="card">
-        <div class="top"><span class="dot ${p.running?'on':''}"></span><h3>${p.title}</h3><span class="id">${p.id}${p.is_default?' · 默认实例':''}</span></div>
-        <div>${chans}${warn}</div>
-        <div class="meta">模型：${p.model||'默认'}　追问间隔：${fu}　${p.running?('PID '+p.pid):'未运行'}</div>
-        <div class="btns">${runBtns}<button onclick="openEdit('${p.id}')">编辑</button><button class="danger" onclick="openClearMemory('${p.id}')">清记忆</button>${consoleBtn}${qrBtn}<button onclick="openLog('${p.id}')">日志</button></div>
+        ${portrait}
+        <div class="top"><h3>${escapeHtml(p.title)}</h3><span class="id">${safeId}</span><span class="dot ${p.running?'on':''}"></span></div>
+        <div class="tags">${chans}${defaultBadge}${warn}</div>
+        <div class="meta">
+          <span class="meta-row">模型：${escapeHtml(p.model||'默认')}</span>
+          <span class="meta-row">访问间隔：${p.followup_first_sec ? rng(p.followup_first_sec).replace('-', ' ') : '默认'}</span>
+          <span class="meta-row">追问间隔：${escapeHtml(fu)} ${p.running ? '' : '未运行'}</span>
+        </div>
+        <div class="btns">${consoleBtn}${runBtn}<button onclick="openEdit('${safeId}')">设置</button><button onclick="openLog('${safeId}')">日志</button><button class="danger" onclick="openClearMemory('${safeId}')">记忆</button>${deleteBtn}${qrBtn}</div>
       </div>`);
   }
 }
@@ -576,7 +942,32 @@ async function bulk(action){
 }
 
 /* 新建 */
-function openCreate(){ fillTemplateSelect(); show('m-create'); }
+function setCreateStep(step){
+  createStep = Math.max(1, Math.min(2, step));
+  const isPersona = createStep === 1;
+  $('create-page-persona').style.display = isPersona ? '' : 'none';
+  $('create-page-runtime').style.display = isPersona ? 'none' : '';
+  $('create-step-persona').classList.toggle('on', isPersona);
+  $('create-step-runtime').classList.toggle('on', !isPersona);
+  $('create-prev').style.display = isPersona ? 'none' : '';
+  $('create-next').style.display = isPersona ? '' : 'none';
+  $('create-submit').style.display = isPersona ? 'none' : '';
+}
+function nextCreateStep(){
+  const id = $('c-id').value.trim();
+  if(!id){
+    toast('先填写人格 ID');
+    $('c-id').focus();
+    return;
+  }
+  if(!/^[a-z0-9_-]{2,32}$/.test(id)){
+    toast('人格 ID 需为 2-32 位小写英文、数字、_ 或 -');
+    $('c-id').focus();
+    return;
+  }
+  setCreateStep(2);
+}
+function openCreate(){ fillTemplateSelect(); renderCreateChoices(); setCreateStep(1); show('m-create'); }
 function setTab(t){
   $('tab-form').classList.toggle('on', t==='form');
   $('tab-raw').classList.toggle('on', t==='raw');
@@ -585,14 +976,133 @@ function setTab(t){
 }
 document.addEventListener('change', e=>{
   if(e.target.id==='c-ch-telegram') $('c-tg-row').style.display = e.target.checked?'':'none';
+  if(['c-gen-model','c-gen-base','c-gen-key'].includes(e.target.id)) syncGeneratorRuntimeConfig();
+});
+document.addEventListener('input', e=>{
+  if(['c-gen-model','c-gen-base','c-gen-key'].includes(e.target.id)) syncGeneratorRuntimeConfig();
 });
 function chans(prefix){
   return ['weixin','telegram','web'].filter(c=>$(`${prefix}-ch-${c}`).checked);
 }
+
+function setEditStep(step){
+  editStep = Math.max(1, Math.min(3, step));
+  const pages = ['runtime','profile','markdown'];
+  pages.forEach((name, idx)=>{
+    const on = editStep === idx + 1;
+    $(`edit-page-${name}`).style.display = on ? '' : 'none';
+    $(`edit-step-${name}`).classList.toggle('on', on);
+  });
+  $('edit-prev').style.display = editStep === 1 ? 'none' : '';
+  $('edit-next').style.display = editStep === 3 ? 'none' : '';
+}
+
+function moveEditStep(delta){
+  setEditStep(editStep + delta);
+}
+
+function syncGeneratorRuntimeConfig(){
+  const model = $('c-gen-model').value.trim();
+  const base = $('c-gen-base').value.trim();
+  const key = $('c-gen-key').value.trim();
+  if(!(model || base || key)) return;
+  $('c-mprov').value = 'mimo';
+  provChange('c');
+  if(model) $('c-mname').value = model;
+  if(base) $('c-mbase').value = base;
+  if(key) $('c-mkey').value = key;
+}
+
+function generatorConfigRequired(){
+  const fields = [
+    ['c-gen-model', '生成模型'],
+    ['c-gen-base', '生成 API Base'],
+    ['c-gen-key', '生成 API Key'],
+  ];
+  const out = {};
+  for(const [id, label] of fields){
+    const value = $(id).value.trim();
+    if(!value){
+      toast(`先填写${label}`);
+      $(id).focus();
+      return null;
+    }
+    out[id] = value;
+  }
+  syncGeneratorRuntimeConfig();
+  return {
+    generator_model: out['c-gen-model'],
+    generator_api_base: out['c-gen-base'],
+    generator_api_key: out['c-gen-key'],
+  };
+}
+
+function createDraftRequired(){
+  const emoji = document.querySelector('input[name=emoji]:checked');
+  const fields = [
+    ['c-bot', 'AI 名字'],
+    ['c-user', '用户名字'],
+    ['c-rel', '关系'],
+    ['c-pers', 'AI 性格'],
+    ['c-style', '说话风格'],
+  ];
+  for(const [id, label] of fields){
+    if(!$(id).value.trim()){
+      toast(`先填写${label}`);
+      $(id).focus();
+      return null;
+    }
+  }
+  if(!emoji){
+    toast('先选择表情使用');
+    return null;
+  }
+  return {
+    bot_name: $('c-bot').value.trim(),
+    user_name: $('c-user').value.trim(),
+    relationship: $('c-rel').value.trim(),
+    personality: $('c-pers').value.trim(),
+    style: $('c-style').value.trim(),
+    emoji_level: emoji.value,
+  };
+}
+
+async function generatePersonaDraft(){
+  const body = createDraftRequired();
+  if(!body) return;
+  const generator = generatorConfigRequired();
+  if(!generator) return;
+  const targets = ['c-bg','c-few','c-uprof','c-urule'];
+  if(targets.some(id=>$(id).value.trim()) && !confirm('生成结果会覆盖当前背景故事、对话示例、用户档案和相处规则，继续吗？')) return;
+  const btn = $('c-generate');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '生成中…';
+  toast('正在生成剩余内容…', 20000);
+  try {
+    const d = await api('/api/persona/generate', {method:'POST', body: JSON.stringify({...body, ...generator})});
+    $('c-bg').value = d.background || '';
+    $('c-few').value = d.few_shot || '';
+    $('c-uprof').value = d.user_profile || '';
+    $('c-urule').value = d.user_rules || '';
+    toast('已生成背景故事、对话示例、用户档案和相处规则');
+  } catch(e){
+    toast(e.message, 8000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
 async function submitCreate(){
+  if(createStep === 1){
+    nextCreateStep();
+    return;
+  }
   const mode = $('pane-raw').style.display==='' ? 'raw' : 'form';
   const body = {
     id: $('c-id').value.trim(), channels: chans('c'),
+    display_name: $('c-bot').value.trim(),
     telegram_token: $('c-tg-token').value.trim(),
     followup_min: +$('c-fmin').value||180, followup_max: +$('c-fmax').value||240,
     followup_max_count: Math.max(0, +$('c-fcount').value||0),
@@ -649,6 +1159,7 @@ async function openEdit(id){
     $('e-imgm').placeholder = d.image_model ? `当前 ${d.image_model}，留空 = 不修改` : '当前自动，不修改请留空';
     $('e-agent').value = d.agent_md; $('e-user').value = d.user_md;
     setProfileFields(d.profile || {});
+    setEditStep(1);
     show('m-edit');
   } catch(e){ toast(e.message); }
 }
@@ -698,6 +1209,94 @@ async function submitClearMemory(){
     const d = await api(`/api/persona/${clearId}/memory/clear`, {method:'POST', body: JSON.stringify(body)});
     hide('m-clear');
     toast(`已清除：${d.message}；备份：${d.backup}`, 10000);
+    refresh();
+  } catch(e){ toast(e.message, 8000); }
+}
+
+/* 删除人格 */
+function openDeletePersona(id){
+  deleteId = id;
+  $('delete-title').textContent = `删除人格：${id}`;
+  $('delete-confirm-label').textContent = `输入人格 ID「${id}」确认删除`;
+  $('delete-confirm').value = '';
+  const backup = document.querySelector('input[name=delete-mode][value="backup"]');
+  if(backup) backup.checked = true;
+  show('m-delete');
+}
+
+async function submitDeletePersona(){
+  if(!deleteId) return;
+  const mode = (document.querySelector('input[name=delete-mode]:checked') || {}).value || 'backup';
+  const body = {confirm: $('delete-confirm').value.trim(), backup: mode === 'backup'};
+  toast(body.backup ? '正在备份并删除人格…' : '正在删除人格…', 15000);
+  try {
+    const d = await api(`/api/persona/${deleteId}/delete`, {method:'POST', body: JSON.stringify(body)});
+    hide('m-delete');
+    toast(d.backup ? `已删除：${d.message}；备份：${d.backup}` : `已删除：${d.message}`, 10000);
+    deleteId = null;
+    refresh();
+  } catch(e){ toast(e.message, 8000); }
+}
+
+/* 加载备份人格 */
+function setRestoreSelection(item){
+  restoreFile = item.file;
+  document.querySelectorAll('.backup-item').forEach(el=>el.classList.toggle('on', el.dataset.file === restoreFile));
+  $('restore-target').value = item.persona_id || '';
+  $('restore-selected').textContent = `已选择：${item.title || item.persona_id}（${item.file}）`;
+}
+
+function renderPersonaBackups(backups){
+  const list = $('restore-list');
+  list.innerHTML = '';
+  restoreFile = null;
+  $('restore-selected').textContent = '请选择一个备份。';
+  if(!backups.length){
+    list.innerHTML = '<div class="empty-state">暂无完整人格备份。删除人格时选择“备份后删除”，这里才会出现可加载的备份。</div>';
+    return;
+  }
+  for(const item of backups){
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'backup-item';
+    btn.dataset.file = item.file;
+    const when = item.modified ? new Date(item.modified * 1000).toLocaleString() : (item.created_at || '');
+    btn.innerHTML = `
+      <b>${escapeHtml(item.title || item.persona_id)} <span class="id">${escapeHtml(item.persona_id)}</span></b>
+      <div class="backup-meta">${escapeHtml(item.file)} · ${formatSize(item.size)} · ${escapeHtml(when)}${item.exists ? ' · 当前同 ID 已存在' : ''}</div>
+    `;
+    btn.addEventListener('click', ()=>setRestoreSelection(item));
+    list.appendChild(btn);
+  }
+}
+
+async function loadPersonaBackups(){
+  try {
+    const d = await api('/api/persona/backups');
+    renderPersonaBackups(d.backups || []);
+  } catch(e){ toast(e.message, 6000); }
+}
+
+function openRestorePersona(){
+  restoreFile = null;
+  $('restore-target').value = '';
+  $('restore-list').innerHTML = '<div class="empty-state">正在读取备份…</div>';
+  $('restore-selected').textContent = '请选择一个备份。';
+  show('m-restore');
+  loadPersonaBackups();
+}
+
+async function submitRestorePersona(){
+  if(!restoreFile){
+    toast('先选择一个备份');
+    return;
+  }
+  const body = {file: restoreFile, target_id: $('restore-target').value.trim()};
+  toast('正在加载备份人格…', 15000);
+  try {
+    const d = await api('/api/persona/restore', {method:'POST', body: JSON.stringify(body)});
+    hide('m-restore');
+    toast(`已加载：${d.message}（${d.config_file}）`, 8000);
     refresh();
   } catch(e){ toast(e.message, 8000); }
 }

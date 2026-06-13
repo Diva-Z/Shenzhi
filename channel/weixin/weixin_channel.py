@@ -27,6 +27,7 @@ from channel.weixin.weixin_api import (
 from channel.weixin.weixin_message import WeixinMessage
 from common.expired_dict import ExpiredDict
 from common.log import logger
+from common.message_splitter import split_text_bubbles
 from common.singleton import singleton
 from config import conf
 
@@ -713,12 +714,7 @@ class WeixinChannel(ChatChannel):
 
         if reply.type == ReplyType.TEXT:
             text = str(reply.content) if reply.content is not None else ""
-            # Split on [MSG] for multi-bubble effect (same as Telegram channel)
-            msg_parts = [p.strip() for p in re.split(r'\[MSG\]', text, flags=re.IGNORECASE) if p.strip()]
-            if not msg_parts:
-                msg_parts = [text]
-            msg_parts = [re.sub(r'\[MSG\]', '', p, flags=re.IGNORECASE).strip() for p in msg_parts]
-            msg_parts = [p for p in msg_parts if p]
+            msg_parts = split_text_bubbles(text)
             if not msg_parts:
                 msg_parts = [text]
             for i, part in enumerate(msg_parts):

@@ -152,6 +152,69 @@ def _clean_display_text(text: str) -> str:
     return cleaned
 
 
+def _conversation_search_terms(query: str) -> List[str]:
+    """Build lightweight LIKE terms for raw conversation search.
+
+    This intentionally avoids adding a migration-only FTS table. The raw
+    ``messages.content`` JSON is stored with ``ensure_ascii=False``, so LIKE can
+    match CJK text directly. For longer CJK queries, short n-grams make natural
+    questions such as "我之前说猫叫什么名字" still find rows containing "猫叫".
+    """
+    query = (query or "").strip()
+    if not query:
+        return []
+
+    terms: List[str] = []
+
+    def add(term: str) -> None:
+        term = (term or "").strip()
+        if len(term) < 2:
+            return
+        lowered = term.lower()
+        if lowered not in terms:
+            terms.append(lowered)
+
+    if len(query) <= 80:
+        add(query)
+
+    for token in re.findall(r"[A-Za-z0-9_]{2,}", query):
+        add(token)
+
+    for run in re.findall(r"[\u3400-\u9fff]+", query):
+        if len(run) <= 6:
+            add(run)
+            continue
+        # Cap n-grams so a long natural-language question does not produce a
+        # huge SQL predicate. The post-filter still ranks by matched terms.
+        for i in range(min(len(run) - 1, 10)):
+            add(run[i:i + 2])
+
+    return terms[:16]
+
+
+def _conversation_snippet(text: str, terms: List[str], max_chars: int = 180) -> str:
+    """Return a compact snippet around the first matched term."""
+    text = (text or "").strip()
+    if len(text) <= max_chars:
+        return text
+    lower = text.lower()
+    hit = -1
+    for term in terms:
+        if not term:
+            continue
+        hit = lower.find(term.lower())
+        if hit >= 0:
+            break
+    if hit < 0:
+        return text[:max_chars] + "..."
+    start = max(0, hit - max_chars // 3)
+    end = min(len(text), start + max_chars)
+    start = max(0, end - max_chars)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(text) else ""
+    return prefix + text[start:end].strip() + suffix
+
+
 def _sanitize_assistant_content(content: Any) -> Any:
     """Remove leaked reasoning from assistant text blocks before LLM/UI use."""
     from common.monologue_filter import (
@@ -993,6 +1056,196 @@ class ConversationStore:
                 return None
             finally:
                 conn.close()
+
+    def search_messages(
+        self,
+        query: str,
+        session_id: Optional[str] = None,
+        role: Optional[str] = None,
+        channel_type: Optional[str] = None,
+        created_after: Optional[int] = None,
+        created_before: Optional[int] = None,
+        limit: int = 10,
+    ) -> Dict[str, Any]:
+        """
+        Search raw persisted conversation messages.
+
+        This is the exact-record layer that complements summarized memory
+        files. It searches the original ``messages`` table and returns stable
+        ``session_id`` + ``seq`` anchors that can be passed to
+        ``load_message_context`` for neighbouring turns.
+        """
+        terms = _conversation_search_terms(query)
+        if not terms:
+            return {"query": query, "matches": [], "total_candidates": 0}
+
+        limit = max(1, min(int(limit or 10), 30))
+        candidate_limit = max(80, min(limit * 25, 600))
+
+        where = []
+        params: List[Any] = []
+        if session_id:
+            where.append("m.session_id = ?")
+            params.append(session_id)
+        if role in ("user", "assistant"):
+            where.append("m.role = ?")
+            params.append(role)
+        if channel_type:
+            where.append("s.channel_type = ?")
+            params.append(channel_type)
+        if created_after:
+            where.append("m.created_at >= ?")
+            params.append(int(created_after))
+        if created_before:
+            where.append("m.created_at <= ?")
+            params.append(int(created_before))
+
+        like_parts = []
+        for term in terms:
+            like_parts.append("LOWER(m.content) LIKE ?")
+            params.append(f"%{term.lower()}%")
+        where.append("(" + " OR ".join(like_parts) + ")")
+
+        sql = f"""
+            SELECT
+                m.session_id, m.seq, m.role, m.content, m.created_at,
+                s.channel_type, s.title
+            FROM messages m
+            JOIN sessions s ON s.session_id = m.session_id
+            WHERE {' AND '.join(where)}
+            ORDER BY m.created_at DESC, m.seq DESC
+            LIMIT ?
+        """
+        params.append(candidate_limit)
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(sql, params).fetchall()
+            finally:
+                conn.close()
+
+        matches = []
+        query_lower = (query or "").strip().lower()
+        for sid, seq, msg_role, raw_content, created_at, ch, title in rows:
+            try:
+                content = json.loads(raw_content)
+            except Exception:
+                content = raw_content
+            text = _extract_display_text(content)
+            if not text:
+                continue
+            if msg_role == "user" and _is_internal_user_marker(text):
+                continue
+            text_lower = text.lower()
+            matched_terms = [t for t in terms if t and t.lower() in text_lower]
+            if not matched_terms:
+                continue
+            score = len(matched_terms)
+            if query_lower and query_lower in text_lower:
+                score += 5
+            matches.append({
+                "session_id": sid,
+                "seq": seq,
+                "role": msg_role,
+                "created_at": created_at,
+                "channel_type": ch or "",
+                "title": title or "",
+                "score": score,
+                "matched_terms": matched_terms[:8],
+                "snippet": _conversation_snippet(text, matched_terms),
+            })
+
+        matches.sort(key=lambda r: (r["score"], r["created_at"], r["seq"]), reverse=True)
+        return {
+            "query": query,
+            "matches": matches[:limit],
+            "total_candidates": len(rows),
+        }
+
+    def load_message_context(
+        self,
+        session_id: str,
+        seq: int,
+        before: int = 3,
+        after: int = 3,
+        include_internal: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Load raw-message context around a stored message seq.
+
+        Args:
+            session_id: Session identifier.
+            seq: Anchor message seq.
+            before: Number of preceding rows to include.
+            after: Number of following rows to include.
+            include_internal: Include tool_result / marker rows when True.
+        """
+        before = max(0, min(int(before or 0), 20))
+        after = max(0, min(int(after or 0), 20))
+        seq = int(seq)
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                session_row = conn.execute(
+                    """
+                    SELECT session_id, channel_type, title, created_at, last_active
+                    FROM sessions
+                    WHERE session_id = ?
+                    """,
+                    (session_id,),
+                ).fetchone()
+                rows = conn.execute(
+                    """
+                    SELECT seq, role, content, created_at
+                    FROM messages
+                    WHERE session_id = ? AND seq BETWEEN ? AND ?
+                    ORDER BY seq ASC
+                    """,
+                    (session_id, seq - before, seq + after),
+                ).fetchall()
+            finally:
+                conn.close()
+
+        messages = []
+        for row_seq, role_name, raw_content, created_at in rows:
+            try:
+                content = json.loads(raw_content)
+            except Exception:
+                content = raw_content
+
+            text = _extract_display_text(content)
+            if not include_internal:
+                if role_name == "user" and not _is_visible_user_message(content):
+                    continue
+                if role_name == "user" and _is_internal_user_marker(text):
+                    continue
+                if not text:
+                    continue
+            messages.append({
+                "seq": row_seq,
+                "role": role_name,
+                "created_at": created_at,
+                "content": text,
+                "is_anchor": row_seq == seq,
+            })
+
+        session = None
+        if session_row:
+            session = {
+                "session_id": session_row[0],
+                "channel_type": session_row[1] or "",
+                "title": session_row[2] or "",
+                "created_at": session_row[3],
+                "last_active": session_row[4],
+            }
+
+        return {
+            "session": session,
+            "anchor_seq": seq,
+            "messages": messages,
+        }
 
     def load_history_page(
         self,

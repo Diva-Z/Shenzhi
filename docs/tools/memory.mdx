@@ -1,9 +1,14 @@
 ---
-title: memory - Memory & Knowledge
-description: Search and read long-term memory and knowledge base files
+title: memory - Memory, Knowledge & Exact Recall
+description: Search long-term memory, knowledge base files, and original chat records
 ---
 
-The memory tool contains two sub-tools: `memory_search` (search memory) and `memory_get` (read memory or knowledge files).
+The memory tool contains four sub-tools:
+
+- `memory_search`: search long-term memory, daily memory, and the knowledge index
+- `memory_get`: read memory or knowledge files
+- `conversation_search`: search original per-message chat records stored in SQLite
+- `conversation_get`: read original chat context by `session_id + seq`
 
 When the [knowledge base](/knowledge) feature is enabled, both tools also support accessing files under the `knowledge/` directory.
 
@@ -29,12 +34,45 @@ Read the content of a specific memory or knowledge file.
 | `start_line` | integer | No | Start line number |
 | `end_line` | integer | No | End line number |
 
+## conversation_search
+
+Search original chat records. This queries the per-message conversation database, not `MEMORY.md` or daily summaries. Use it for:
+
+- "Did I ever say ...?"
+- "What were my exact words?"
+- "How did you reply last time?"
+- "What did we say when we talked about X on that day?"
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `query` | string | Yes | Keywords or phrase to search |
+| `session_id` | string | No | Specific session; defaults to the current session |
+| `search_all_sessions` | boolean | No | Search across sessions; use only when the user explicitly asks |
+| `role` | string | No | `user` / `assistant` / `all` |
+| `days` | integer | No | Search only the last N days |
+| `limit` | integer | No | Number of matches, default 8, max 30 |
+
+Results include `session_id` and `seq`, which can be passed to `conversation_get`.
+
+## conversation_get
+
+Read neighbouring original messages around a `conversation_search` hit. Use this to verify exact wording before answering from old chat records.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `seq` | integer | Yes | Message seq returned by `conversation_search` |
+| `session_id` | string | No | Specific session; defaults to the current session |
+| `before` | integer | No | Previous raw rows to include, default 3 |
+| `after` | integer | No | Following raw rows to include, default 3 |
+| `include_internal` | boolean | No | Include tool results or internal markers, default false |
+
 ## How It Works
 
 The Agent automatically invokes memory tools in these scenarios:
 
 - When the user shares important information → stores to memory
 - When historical context is needed → searches relevant memory
+- When the user asks for exact past wording / whether something was said → searches original chat records and reads context
 - When conversation reaches a certain length → extracts summary for storage
 - When discussing domain knowledge → retrieves relevant pages from the knowledge base
 

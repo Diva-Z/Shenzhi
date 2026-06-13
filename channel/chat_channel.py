@@ -11,6 +11,7 @@ from channel.channel import Channel
 from common.dequeue import Dequeue
 from common import memory
 from common.i18n import t as _t
+from common.message_splitter import split_text_bubbles
 from plugins import *
 
 try:
@@ -341,14 +342,14 @@ class ChatChannel(Channel):
 
     def _safe_text_parts(self, text, context: Context = None):
         raw_text = str(text or "")
-        parts = [p.strip() for p in re.split(r'\[MSG\]', raw_text, flags=re.IGNORECASE) if p.strip()]
-        if not parts and raw_text.strip():
-            parts = [raw_text]
         safe_parts = []
-        for part in parts:
+        explicit_parts = [p.strip() for p in re.split(r'\[MSG\]', raw_text, flags=re.IGNORECASE) if p.strip()]
+        if not explicit_parts and raw_text.strip():
+            explicit_parts = [raw_text]
+        for part in explicit_parts:
             cleaned = self._sanitize_outgoing_text(part, context, "message part")
             if cleaned:
-                safe_parts.append(cleaned)
+                safe_parts.extend(split_text_bubbles(cleaned))
         return safe_parts
 
     def _send_reply(self, context: Context, reply: Reply):

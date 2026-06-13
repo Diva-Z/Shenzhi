@@ -65,6 +65,15 @@ Conversation messages are persisted to a local database, automatically restored 
 - Only retains each turn's **user text and Agent final reply**, not intermediate tool call chains
 - Sessions older than **30 days** are automatically cleaned up
 
+### Exact Wording Recall
+
+Session persistence and model context are different layers: the database keeps original per-message records, but the model does not automatically load all history every turn. When exact wording needs to be verified, the Agent uses:
+
+- `conversation_search`: search keywords or phrases in the SQLite raw chat log
+- `conversation_get`: read neighbouring messages by the matched `session_id + seq`
+
+This layer is for questions like "what exactly did I say before?", "how did you reply then?", and "did we ever talk about X?". General preferences, long-term facts, and relationship changes still belong in `MEMORY.md`, daily memory, and `memory_search`.
+
 ## Commands
 
 Use these commands in chat to manage context:

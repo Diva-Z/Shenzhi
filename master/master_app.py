@@ -31,6 +31,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+import requests  # noqa: E402
 import web  # noqa: E402  (web.py, already a project dependency)
 
 from common.companion_profile import (  # noqa: E402
@@ -52,6 +53,8 @@ WEB_PORT_POOL = list(range(9890, 9900))
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,23}$")
 _QR_RE = re.compile(r"二维码链接[^h]*?(https://\S+)")
+PERSONA_BACKUP_MANIFEST = "SHENZHI_PERSONA_BACKUP.json"
+PERSONA_BACKUP_TYPE = "shenzhi.persona.backup.v1"
 
 # 模型厂商注册表：bot_type → (显示名, api_key 配置键, api_base 配置键或 None, 模型名提示)
 # bot_type 与 config-*.json 的 "bot_type" 字段一致（见 common/const.py 与 bridge/bridge.py 的推断规则）。
@@ -144,6 +147,7 @@ VOICE_ENGINES = [
     "xunfei", "tencent", "minimax", "elevenlabs", "pytts", "zhipu", "mimo", "linkai",
 ]
 IMAGE_PROVIDERS = ["dashscope", "openai", "gemini", "doubao", "minimax", "linkai"]
+
 
 
 def _apply_media_settings(cfg, b):
@@ -320,7 +324,7 @@ def _profile_from_form(form):
 
 def _persona_title(name):
     agent_md = _read_text(os.path.join(_personas_dir(), name, "AGENT.md"))
-    m = re.search(r"^#\s*(?:角色设定[:：]\s*)?(.+)$", agent_md, re.M)
+    m = re.search(r"^\ufeff?#(?!#)\s*(?:角色设定[:：]\s*)?(.+)$", agent_md, re.M)
     return (m.group(1).strip() if m else name) or name
 
 
@@ -335,6 +339,30 @@ def _weixin_logged_in(cfg):
     cred = os.path.expanduser(cfg.get("weixin_credentials_path", "~/.weixin_cow_credentials.json"))
     data = _load_json(cred)
     return bool(data.get("token"))
+
+
+def _weixin_credential_paths(name, cfg=None):
+    paths = []
+    if cfg:
+        configured = (cfg.get("weixin_credentials_path") or "").strip()
+        if configured:
+            paths.append(os.path.expanduser(configured))
+    paths.append(os.path.expanduser(f"~/.weixin_cow_credentials_{name}.json"))
+
+    home = os.path.realpath(os.path.expanduser("~"))
+    out = []
+    seen = set()
+    for path in paths:
+        real = os.path.realpath(path)
+        base = os.path.basename(real)
+        # Only clean ShenZhi per-persona Weixin credentials, not arbitrary
+        # custom paths that might have been put in config by hand.
+        if not real.startswith(home + os.sep) or not base.startswith(".weixin_cow_credentials_"):
+            continue
+        if real not in seen:
+            out.append(real)
+            seen.add(real)
+    return out
 
 
 def _instance_log_path(name):
@@ -381,6 +409,7 @@ def _persona_info(name):
     cfg = _load_json(cfg_path)
     pid = _read_pid(_instance_arg(name))
     channels = _persona_channels(cfg) if cfg else []
+    avatar_url = _persona_avatar_url(name)
     info = {
         "id": name,
         "title": _persona_title(name),
@@ -400,10 +429,25 @@ def _persona_info(name):
         "telegram_token_set": bool(cfg.get("telegram_token")),
         "weixin_logged_in": _weixin_logged_in(cfg) if "weixin" in channels else None,
         "weixin_qr_available": False,
+        "avatar_url": avatar_url,
     }
     if pid is not None and "weixin" in channels and not info["weixin_logged_in"]:
         info["weixin_qr_available"] = bool(_latest_qr_url(name))
     return info
+
+
+def _persona_avatar_path(name):
+    safe = name.lower()
+    assets = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+    for ext in ("png", "jpg", "jpeg", "webp"):
+        path = os.path.join(assets, f"avatar-{safe}.{ext}")
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
+def _persona_avatar_url(name):
+    return f"/api/persona/{name}/avatar" if _persona_avatar_path(name) else ""
 
 
 def _list_personas():
@@ -542,6 +586,115 @@ def _builtin_template_form(template_id):
         if item["id"] == raw_id:
             return dict(item.get("form") or {})
     return {}
+
+
+def _retarget_copied_persona(agent_md, user_md, profile, source_name, target_name):
+    source = (source_name or "").strip()
+    target = (target_name or "").strip()
+    if source and target and source != target:
+        agent_md = agent_md.replace(source, target)
+        user_md = user_md.replace(source, target)
+    if isinstance(profile, dict):
+        rel = profile.setdefault("relationship", {})
+        if isinstance(rel, dict):
+            rel["bot_address"] = target
+    return agent_md, user_md, profile
+
+
+def _extract_json_object(text):
+    raw = (text or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.I)
+    raw = re.sub(r"\s*```$", "", raw)
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+    m = re.search(r"\{[\s\S]*\}", raw)
+    if not m:
+        raise ValueError("模型没有返回 JSON")
+    return json.loads(m.group(0))
+
+
+def _clean_generated_draft(data):
+    out = {}
+    for key in ("background", "few_shot", "user_profile", "user_rules"):
+        value = data.get(key, "") if isinstance(data, dict) else ""
+        if isinstance(value, list):
+            value = "\n".join(str(x).strip() for x in value if str(x).strip())
+        out[key] = str(value or "").strip()
+    if not any(out.values()):
+        raise ValueError("模型返回内容为空")
+    return out
+
+
+def _generate_persona_draft(form, generator):
+    api_key = (generator.get("api_key") or "").strip()
+    api_base = (generator.get("api_base") or "").strip().rstrip("/")
+    model = (generator.get("model") or "").strip()
+    if not api_key or not api_base or not model:
+        raise RuntimeError("生成模型、API Base、API Key 都必须填写")
+    if not re.match(r"^https?://", api_base, re.I):
+        raise RuntimeError("生成 API Base 必须以 http:// 或 https:// 开头")
+    emoji_rule = _EMOJI_RULES.get(form.get("emoji_level", "few"), _EMOJI_RULES["few"])
+    prompt = f"""
+请根据以下已填写的人格基础信息，补全一个中文 AI 伴侣人格草稿。
+
+已填写：
+- AI 名字：{form.get('bot_name')}
+- 用户名字：{form.get('user_name')}
+- 关系：{form.get('relationship')}
+- 表情使用：{emoji_rule}
+- AI 性格：
+{form.get('personality')}
+- 说话风格：
+{form.get('style')}
+
+生成要求：
+- 风格接近“沈知”：像真实的人在微信里聊天，具体、亲近、克制，不像客服或助手。
+- 背景故事要能支撑关系，不要玄幻，不要过度狗血，给出两人的认识方式、日常相处和当前状态。
+- 对话示例要体现性格和说话风格，格式必须是一行用户说、一行 AI 回；AI 多句用 [MSG] 分隔。
+- 用户档案用短条目描述，包含作息/性格/工作或学习状态/相处偏好，可以合理留白但不要编造敏感隐私。
+- 相处规则用短条目描述边界、追问、安抚、提醒方式。
+
+只返回 JSON，不要 Markdown，不要解释。JSON schema：
+{{
+  "background": "2-4 段背景故事",
+  "few_shot": "4 组对话示例，每组两行，AI 多句用 [MSG] 分隔",
+  "user_profile": "- 条目1\\n- 条目2",
+  "user_rules": "- 条目1\\n- 条目2"
+}}
+""".strip()
+
+    resp = requests.post(
+        f"{api_base}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是沈知主控端的人格编辑器，只为 AI 伴侣项目补全人设素材。"
+                        "必须输出严格 JSON。"
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.82,
+        },
+        timeout=60,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"MiMo 生成失败：HTTP {resp.status_code} {resp.text[:300]}")
+    payload = resp.json()
+    try:
+        content = payload["choices"][0]["message"]["content"]
+    except Exception as exc:
+        raise RuntimeError("MiMo 返回格式不符合 chat/completions") from exc
+    return _clean_generated_draft(_extract_json_object(content))
 
 
 def _gen_agent_md(f):
@@ -693,6 +846,212 @@ def _backup_persona_data(name):
     return zip_path
 
 
+def _backup_dir():
+    path = os.path.join(_workspace_root(), "backups")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _zip_safe_name(name):
+    norm = str(name or "").replace("\\", "/")
+    if not norm or norm.startswith("/") or re.match(r"^[A-Za-z]:", norm):
+        return ""
+    parts = [p for p in norm.split("/") if p]
+    if any(p == ".." for p in parts):
+        return ""
+    return "/".join(parts)
+
+
+def _backup_persona_full(name):
+    pdir = os.path.join(_personas_dir(), name)
+    cfg_path = _config_path(name)
+    if not os.path.isdir(pdir) and not os.path.exists(cfg_path):
+        raise RuntimeError("人格不存在，无法备份")
+
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    zip_path = os.path.join(_backup_dir(), f"{name}-persona-{ts}.zip")
+    manifest = {
+        "type": PERSONA_BACKUP_TYPE,
+        "version": 1,
+        "persona_id": name,
+        "title": _persona_title(name),
+        "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "config_file": os.path.basename(cfg_path),
+    }
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(PERSONA_BACKUP_MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=2))
+        if os.path.isdir(pdir):
+            for root, _dirs, files in os.walk(pdir):
+                for fn in files:
+                    path = os.path.join(root, fn)
+                    rel = os.path.relpath(path, pdir).replace("\\", "/")
+                    zf.write(path, f"persona/{rel}")
+        if os.path.exists(cfg_path):
+            zf.write(cfg_path, "config.json")
+        for log_path in (
+            os.path.join(PROJECT_ROOT, f"shenzhi-{name}.out"),
+            os.path.join(PROJECT_ROOT, f"run-{name}.log"),
+        ):
+            if os.path.exists(log_path):
+                zf.write(log_path, f"logs/{os.path.basename(log_path)}")
+    return zip_path
+
+
+def _persona_backup_manifest(path):
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            if PERSONA_BACKUP_MANIFEST not in zf.namelist():
+                return None
+            manifest = json.loads(zf.read(PERSONA_BACKUP_MANIFEST).decode("utf-8"))
+    except Exception:
+        return None
+    if manifest.get("type") != PERSONA_BACKUP_TYPE:
+        return None
+    persona_id = (manifest.get("persona_id") or "").strip().lower()
+    if not _NAME_RE.match(persona_id):
+        return None
+    return manifest
+
+
+def _list_persona_backups():
+    bdir = _backup_dir()
+    rows = []
+    for fn in os.listdir(bdir):
+        if not fn.lower().endswith(".zip"):
+            continue
+        path = os.path.join(bdir, fn)
+        if not os.path.isfile(path):
+            continue
+        manifest = _persona_backup_manifest(path)
+        if not manifest:
+            continue
+        persona_id = manifest["persona_id"]
+        rows.append({
+            "file": fn,
+            "persona_id": persona_id,
+            "title": manifest.get("title") or persona_id,
+            "created_at": manifest.get("created_at") or "",
+            "size": os.path.getsize(path),
+            "modified": int(os.path.getmtime(path)),
+            "exists": os.path.isdir(os.path.join(_personas_dir(), persona_id)) or os.path.exists(_config_path(persona_id)),
+        })
+    rows.sort(key=lambda x: x["modified"], reverse=True)
+    return rows
+
+
+def _restore_persona_backup(filename, target_id=None):
+    fn = os.path.basename(filename or "")
+    if not fn or fn != (filename or "") or not fn.lower().endswith(".zip"):
+        return False, "备份文件名不合法", None
+    path = os.path.join(_backup_dir(), fn)
+    if not os.path.isfile(path):
+        return False, "备份文件不存在", None
+
+    manifest = _persona_backup_manifest(path)
+    if not manifest:
+        return False, "这不是完整人格备份，不能加载", None
+    source_id = manifest["persona_id"]
+    name = (target_id or source_id).strip().lower()
+    if not _NAME_RE.match(name):
+        return False, "恢复目标人格 ID 需为 2-24 位小写字母/数字/横线，且以字母开头", None
+
+    pdir = os.path.join(_personas_dir(), name)
+    cfg_path = _config_path(name)
+    if os.path.isdir(pdir) or os.path.exists(cfg_path):
+        return False, f"人格 {name} 已存在，不能覆盖加载", None
+
+    tmp_dir = f"{pdir}.restore-tmp-{int(time.time())}"
+    tmp_cfg = f"{cfg_path}.restore-tmp"
+    moved = False
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            names = {_zip_safe_name(n) for n in zf.namelist()}
+            if "config.json" not in names:
+                return False, "备份缺少 config.json", None
+            for info in zf.infolist():
+                member = _zip_safe_name(info.filename)
+                if not member or info.is_dir() or not member.startswith("persona/"):
+                    continue
+                rel = member[len("persona/"):]
+                if not rel:
+                    continue
+                dest = os.path.join(tmp_dir, *rel.split("/"))
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with zf.open(info, "r") as src, open(dest, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+            if not os.path.exists(os.path.join(tmp_dir, "AGENT.md")) or not os.path.exists(os.path.join(tmp_dir, "USER.md")):
+                return False, "备份缺少 AGENT.md 或 USER.md", None
+            cfg = json.loads(zf.read("config.json").decode("utf-8"))
+        if not isinstance(cfg, dict):
+            return False, "备份里的 config.json 格式不正确", None
+        cfg["active_persona"] = name
+        if cfg.get("web_console"):
+            cfg["web_port"] = _alloc_web_port()
+        if cfg.get("weixin_credentials_path"):
+            cfg["weixin_credentials_path"] = f"~/.weixin_cow_credentials_{name}.json"
+            for cred_path in _weixin_credential_paths(name, cfg):
+                try:
+                    if os.path.exists(cred_path):
+                        os.remove(cred_path)
+                except OSError:
+                    pass
+        os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+        with open(tmp_cfg, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=4)
+        os.makedirs(os.path.dirname(pdir), exist_ok=True)
+        os.rename(tmp_dir, pdir)
+        moved = True
+        os.replace(tmp_cfg, cfg_path)
+        return True, f"已加载备份为人格 {name}", {"id": name, "config_file": os.path.basename(cfg_path)}
+    except Exception as e:
+        if moved and os.path.isdir(pdir):
+            shutil.rmtree(pdir, ignore_errors=True)
+        return False, f"加载失败：{e}", None
+    finally:
+        if os.path.isdir(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        try:
+            if os.path.exists(tmp_cfg):
+                os.remove(tmp_cfg)
+        except OSError:
+            pass
+
+
+def _delete_persona(name, backup=False):
+    if name == _default_persona():
+        return False, "默认人格不能在主控端删除", None
+    pdir = os.path.join(_personas_dir(), name)
+    cfg_path = _config_path(name)
+    cfg = _load_json(cfg_path)
+    if not os.path.isdir(pdir) and not os.path.exists(cfg_path):
+        return False, "人格不存在", None
+    if _read_pid(_instance_arg(name)) is not None:
+        return False, "请先停止该人格实例，再删除", None
+
+    backup_path = _backup_persona_full(name) if backup else None
+    if os.path.isdir(pdir):
+        shutil.rmtree(pdir)
+    if os.path.exists(cfg_path):
+        os.remove(cfg_path)
+    for cred_path in _weixin_credential_paths(name, cfg):
+        try:
+            if os.path.exists(cred_path):
+                os.remove(cred_path)
+        except OSError:
+            pass
+    for path in (
+        os.path.join(PROJECT_ROOT, f".shenzhi-{name}.pid"),
+        os.path.join(PROJECT_ROOT, f"shenzhi-{name}.out"),
+        os.path.join(PROJECT_ROOT, f"run-{name}.log"),
+    ):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+    return True, f"人格 {name} 已删除", backup_path
+
+
 def _sqlite_delete_tables(db_path, tables):
     if not os.path.exists(db_path):
         return 0
@@ -769,7 +1128,12 @@ urls = (
     "/", "Index",
     "/api/overview", "Overview",
     "/api/persona", "PersonaCreate",
+    "/api/persona/backups", "PersonaBackups",
+    "/api/persona/restore", "PersonaRestore",
+    "/api/persona/generate", "PersonaGenerate",
+    "/api/persona/([a-z0-9_-]+)/avatar", "PersonaAvatar",
     "/api/persona/([a-z0-9_-]+)", "PersonaDetail",
+    "/api/persona/([a-z0-9_-]+)/delete", "PersonaDelete",
     "/api/persona/([a-z0-9_-]+)/memory/clear", "PersonaMemoryClear",
     "/api/instance/([a-z0-9_-]+)/(start|stop|restart)", "InstanceAction",
     "/api/instances/(start_all|stop_all)", "InstanceBulk",
@@ -811,6 +1175,79 @@ class Overview:
             "image_providers": IMAGE_PROVIDERS,
             "persona_templates": _templates_payload(),
         })
+
+
+class PersonaAvatar:
+    def GET(self, name):
+        path = _persona_avatar_path(name)
+        if not path:
+            web.ctx.status = "404 Not Found"
+            return b""
+        ext = os.path.splitext(path)[1].lower().lstrip(".")
+        content_type = {
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "webp": "image/webp",
+        }.get(ext, "application/octet-stream")
+        web.header("Content-Type", content_type)
+        with open(path, "rb") as f:
+            return f.read()
+
+
+class PersonaGenerate:
+    def POST(self):
+        b = _body()
+        required = [
+            ("bot_name", "AI 名字"),
+            ("user_name", "用户名字"),
+            ("relationship", "关系"),
+            ("emoji_level", "表情使用"),
+            ("personality", "AI 性格"),
+            ("style", "说话风格"),
+        ]
+        generator_required = [
+            ("generator_model", "生成模型"),
+            ("generator_api_base", "生成 API Base"),
+            ("generator_api_key", "生成 API Key"),
+        ]
+        form = {}
+        for key, label in required:
+            value = (b.get(key) or "").strip()
+            if not value:
+                return _json_resp({"error": f"请先填写{label}"}, "400 Bad Request")
+            form[key] = value
+        if form["emoji_level"] not in _EMOJI_RULES:
+            return _json_resp({"error": "表情使用选项不合法"}, "400 Bad Request")
+        generator = {}
+        for key, label in generator_required:
+            value = (b.get(key) or "").strip()
+            if not value:
+                return _json_resp({"error": f"请先填写{label}"}, "400 Bad Request")
+            generator[key.removeprefix("generator_")] = value
+        try:
+            draft = _generate_persona_draft(form, generator)
+        except Exception as e:
+            return _json_resp({"error": str(e)}, "502 Bad Gateway")
+        return _json_resp({"ok": True, **draft})
+
+
+class PersonaBackups:
+    def GET(self):
+        return _json_resp({"backups": _list_persona_backups()})
+
+
+class PersonaRestore:
+    def POST(self):
+        b = _body()
+        ok, message, info = _restore_persona_backup(
+            (b.get("file") or "").strip(),
+            (b.get("target_id") or "").strip() or None,
+        )
+        payload = {"ok": ok, "message": message}
+        if info:
+            payload.update(info)
+        return _json_resp(payload, "200 OK" if ok else "400 Bad Request")
 
 
 class PersonaDetail:
@@ -938,6 +1375,9 @@ class PersonaCreate:
         if copy_from:
             if not _NAME_RE.match(copy_from):
                 return _json_resp({"error": "复制来源人格 ID 不合法"}, "400 Bad Request")
+            display_name = (b.get("display_name") or "").strip()
+            if not display_name:
+                return _json_resp({"error": "复制人格时必须填写新的 AI 名字 / 显示名"}, "400 Bad Request")
             src_dir = os.path.join(_personas_dir(), copy_from)
             if not os.path.isdir(src_dir):
                 return _json_resp({"error": f"复制来源人格 {copy_from} 不存在"}, "400 Bad Request")
@@ -946,6 +1386,9 @@ class PersonaCreate:
             if not agent_md or not user_md:
                 return _json_resp({"error": f"复制来源人格 {copy_from} 缺少 AGENT.md 或 USER.md"}, "400 Bad Request")
             profile = load_companion_profile(src_dir) or default_companion_profile()
+            agent_md, user_md, profile = _retarget_copied_persona(
+                agent_md, user_md, profile, _persona_title(copy_from), display_name
+            )
         elif b.get("mode") == "raw":
             agent_md = (b.get("agent_md") or "").strip()
             user_md = (b.get("user_md") or "").strip()
@@ -1006,6 +1449,24 @@ class PersonaMemoryClear:
             return _json_resp({"error": f"清除失败：{e}"}, "500 Internal Server Error")
         return _json_resp(
             {"ok": ok, "message": message, "backup": backup},
+            "200 OK" if ok else "409 Conflict",
+        )
+
+
+class PersonaDelete:
+    def POST(self, name):
+        b = _body()
+        if (b.get("confirm") or "").strip().lower() != name:
+            return _json_resp({"error": f"请输入人格 ID「{name}」确认删除"}, "400 Bad Request")
+        try:
+            ok, message, backup = _delete_persona(name, bool(b.get("backup")))
+        except Exception as e:
+            return _json_resp({"error": f"删除失败：{e}"}, "500 Internal Server Error")
+        payload = {"ok": ok, "message": message}
+        if backup:
+            payload["backup"] = backup
+        return _json_resp(
+            payload,
             "200 OK" if ok else "409 Conflict",
         )
 
