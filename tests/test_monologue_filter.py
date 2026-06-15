@@ -63,6 +63,49 @@ def test_strip_msg_prefixed_chinese_reasoning_keeps_replies(monkeypatch):
     assert not is_probable_full_monologue(strip_leaked_monologue(text))
 
 
+def test_drop_english_reasoning_with_contractions():
+    # "She's" / "He'd" contractions + natural narration, no meta vocabulary.
+    text = (
+        "She's teasing him about whether he can afford to support her. "
+        "He'd be a bit defensive but serious about it."
+    )
+
+    assert strip_leaked_monologue(text) == ""
+    assert is_probable_full_monologue(text)
+    assert sanitize_streaming_assistant_text(text) == ""
+
+
+def test_drop_english_reasoning_with_embedded_persona_name(monkeypatch):
+    monkeypatch.setattr(monologue_filter, "get_persona_display_name", lambda: "晨风")
+    # A stray persona name inside English reasoning must not keep it alive.
+    text = (
+        "She's asking for a goodnight kiss. As 晨风, I'd be flustered but "
+        "after everything tonight, maybe I give in."
+    )
+
+    assert strip_leaked_monologue(text) == ""
+    assert is_probable_full_monologue(text)
+
+
+def test_strip_chinese_third_person_self_narration(monkeypatch):
+    monkeypatch.setattr(monologue_filter, "get_persona_display_name", lambda: "晨风")
+    # Reasoning narrates the persona in third person (他/她) instead of the name.
+    text = (
+        '她说"听你的"，那他就直接定了。按他的风格，不会纠结选择困难症，'
+        "直接拍板。那就定一个他觉得她会喜欢的。[MSG]算了别想了[MSG]晚上吃火锅"
+    )
+
+    assert strip_leaked_monologue(text) == "算了别想了[MSG]晚上吃火锅"
+
+
+def test_keep_reply_mentioning_third_party_he(monkeypatch):
+    monkeypatch.setattr(monologue_filter, "get_persona_display_name", lambda: "晨风")
+    # A genuine reply that mentions a third party "他" must not be dropped.
+    text = "他会来的[MSG]他想你了别担心"
+
+    assert strip_leaked_monologue(text) == text
+
+
 def test_followup_drop_reason_handles_skip_and_full_monologue():
     assert followup_drop_reason("[SKIP]") == "skip"
 

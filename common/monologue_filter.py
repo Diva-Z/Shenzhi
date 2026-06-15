@@ -68,6 +68,50 @@ _EN_HIGH_SIGNAL_META_RE = re.compile(
     r'short\s+responses?|composure|flustered)\b',
     re.IGNORECASE,
 )
+# Bare third-person/user opener (allows contractions: "She's", "He'd", "They're").
+# Used only together with the predominantly-English gate below, so it can stay loose.
+_EN_THIRDPERSON_OPENER_RE = re.compile(
+    r"^\s*(?:the\s+)?(?:user|he|she|they)(?:'\w{1,3}|\s)",
+    re.IGNORECASE,
+)
+# Chinese leaked reasoning often narrates the persona in third person (他/她 …会/觉得/想)
+# instead of replying in first person. 2026-06-15 晨风 sample used 他/她 pronouns
+# rather than the persona name, slipping past the name/marker checks.
+_ZH_SELF_NARRATION_RE = re.compile(
+    r'(?:他|她)(?:会|就|不会|不想|不太|得|觉得|可能|应该|大概|想|打算|准备|心里|多半|估计|懒得|才)'
+)
+_ZH_ANALYSIS_CUE_RE = re.compile(
+    r'(?:她说|他说|她问|他问|用户|对方|回复|回应|语气|口吻|纠结|拍板|选择困难|'
+    r'按.{0,3}性格|按.{0,3}风格|以.{0,3}性格|以.{0,3}风格)'
+)
+
+
+def _cjk_ratio(text: str) -> float:
+    """Fraction of letters that are CJK. ~0 means the text is essentially English."""
+    cjk = len(_CJK_RE.findall(text or ""))
+    latin = sum(1 for c in (text or "") if c.isascii() and c.isalpha())
+    total = cjk + latin
+    return (cjk / total) if total else 0.0
+
+
+def _looks_like_english_reasoning(t: str) -> bool:
+    """A Chinese-speaking persona never genuinely replies in English; a long,
+    predominantly-English turn opening with a third-person/first-person narrator
+    is leaked reasoning even without the narrow meta vocabulary."""
+    if len(t) < 40 or _cjk_ratio(t) >= 0.15:
+        return False
+    lower = t.lower()
+    return bool(_EN_THIRDPERSON_OPENER_RE.match(lower) or _EN_FIRST_PERSON_META_RE.match(lower))
+
+
+def _looks_like_chinese_self_narration(t: str) -> bool:
+    """Persona narrating itself in third person ("…那他就直接定了…他觉得…")."""
+    if _MSG_MARKER_RE.search(t):
+        return False
+    hits = len(_ZH_SELF_NARRATION_RE.findall(t))
+    if hits >= 3:
+        return True
+    return hits >= 2 and bool(_ZH_ANALYSIS_CUE_RE.search(t))
 _REPLY_LABEL_RE = re.compile(
     r'(?:回复|回应|正文|最终回复|实际回复|final\s+reply|reply|response)\s*[:：]\s*',
     re.IGNORECASE,
@@ -146,6 +190,10 @@ def _looks_like_reasoning(text: str, persona_name: str) -> bool:
         first = _MSG_MARKER_RE.split(t, maxsplit=1)[0].strip()
         return bool(first and _looks_like_reasoning(first, persona_name))
     if _prefix_is_monologue(t, persona_name):
+        return True
+    if _looks_like_chinese_self_narration(t):
+        return True
+    if _looks_like_english_reasoning(t):
         return True
     first_line = t.splitlines()[0].strip()
     if _REASONING_HEADING_RE.match(first_line):
@@ -251,7 +299,15 @@ def _strip_full_english_reasoning(text: str, persona_name: str) -> str:
     tail = _extract_cjk_tail(t, persona_name)
     if tail:
         return tail
-    if not _has_cjk(t) and (_EN_REASONING_START_RE.match(t) or _EN_META_RE.search(t)):
+    # Predominantly-English reasoning with no clean Chinese reply to salvage:
+    # drop it whole. Uses the ratio (not `not _has_cjk`) so a stray persona
+    # name embedded in the reasoning ("As 晨风, I'd…") doesn't keep it alive.
+    if _cjk_ratio(t) < 0.15 and (
+        _EN_THIRDPERSON_OPENER_RE.match(t)
+        or _EN_REASONING_START_RE.match(t)
+        or _EN_FIRST_PERSON_META_RE.match(t)
+        or _EN_META_RE.search(t)
+    ):
         return ""
     return text
 
