@@ -1,7 +1,34 @@
 """ShenZhi CLI entry point."""
 
+import sys
+
 import click
 from cli import __version__
+
+
+def _make_console_output_safe():
+    """Keep CLI output from crashing on legacy consoles (e.g. Windows GBK).
+
+    Status lines use glyphs like ``✓`` / ``●`` that a GBK console cannot encode.
+    Without this, ``stop``'s final "✓ stopped" echo raises UnicodeEncodeError,
+    which aborts ``restart`` *after* the stop but *before* the start — leaving
+    the instance down. Keep the console's native encoding so Chinese text still
+    renders correctly; only soften the error handler so an un-encodable symbol
+    degrades to '?' instead of raising.
+    """
+    safe_handlers = ("replace", "ignore", "backslashreplace", "xmlcharrefreplace")
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            reconfigure = getattr(stream, "reconfigure", None)
+            # 'strict' raises; 'surrogateescape' also raises on a real non-GBK
+            # glyph like ✓. Only leave already-permissive handlers untouched.
+            if reconfigure is not None and (getattr(stream, "errors", None) or "") not in safe_handlers:
+                reconfigure(errors="replace")
+        except Exception:
+            pass
+
+
+_make_console_output_safe()
 from cli.commands.skill import skill
 from cli.commands.process import start, stop, restart, update, status, logs
 from cli.commands.context import context

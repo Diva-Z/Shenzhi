@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-06-15 孤立 `</think>` 标签泄漏与 CLI GBK 崩溃
+
+问题一：用户侧仍会收到夹在正文里的裸 `</think>` 标签。根因是 `_filter_think_tags` 按「每个流式 delta」过滤，`<think>` 与配对的 `</think>` 常分散在不同 chunk：落单的 `<think>` 被「未闭合尾部」规则清掉，落单的 `</think>` 不匹配任何规则原样泄漏；message_end 的整体复扫此时已无开标签可配对。
+
+问题二：`shenzhi restart` 在裸 GBK 控制台（未设 `PYTHONUTF8`）必崩。`stop` 末尾打印的 `✓`(U+2713) 不在 GBK 字符集，触发 `UnicodeEncodeError`，异常发生在 stop 之后、start 之前，导致实例被停掉却没拉起。
+
+改动：
+
+- `agent/protocol/agent_stream.py`：`_filter_think_tags` 在去成对块和未闭合尾部后，再清掉残留的孤立 `<think>` / `</think>` 标签，并放宽大小写与空白变体。
+- `cli/cli.py`：入口处把 stdout/stderr 错误处理器改成 `replace`（保留控制台原生编码，中文照常），无法编码的状态符号降级为 `?` 而非抛异常；兼容 `strict` 与 `surrogateescape`。
+
+---
+
 ## 2026-06-13 GitHub 模板化发布
 
 目标：把晨风、海洋、沈知三个人格作为可复用模板提交到 GitHub，让新用户 clone 后安装模板、补配置即可运行。

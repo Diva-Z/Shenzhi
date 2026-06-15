@@ -250,13 +250,23 @@ class AgentStreamExecutor:
         if not text:
             return text
         import re
+        # Tolerate whitespace/casing variants: <think>, </ Think >, etc.
+        open_tag = r'<\s*think\s*>'
+        close_tag = r'<\s*/\s*think\s*>'
         if self._should_render_thinking_inline():
-            text = re.sub(r'<think>', '', text)
-            text = re.sub(r'</think>', '', text)
+            text = re.sub(open_tag, '', text, flags=re.IGNORECASE)
+            text = re.sub(close_tag, '', text, flags=re.IGNORECASE)
         else:
-            text = re.sub(r'<think>[\s\S]*?</think>', '', text)
+            text = re.sub(open_tag + r'[\s\S]*?' + close_tag, '', text, flags=re.IGNORECASE)
             # Also strip unclosed <think> tag at the end (streaming partial)
-            text = re.sub(r'<think>[\s\S]*$', '', text)
+            text = re.sub(open_tag + r'[\s\S]*$', '', text, flags=re.IGNORECASE)
+            # Strip orphan tags left behind. Filtering runs per streaming delta,
+            # so a <think> and its matching </think> can arrive in different
+            # chunks and never form a pair: the lone <think> chunk is removed by
+            # the unclosed-tail rule above, but the later </think> chunk matches
+            # nothing and would otherwise leak the raw tag to the user
+            # (2026-06-15 晨风: '...反正就一堵墙</think>（看了眼消息...').
+            text = re.sub(open_tag + r'|' + close_tag, '', text, flags=re.IGNORECASE)
         return text
 
     def _hash_args(self, args: dict) -> str:
