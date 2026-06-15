@@ -554,9 +554,14 @@ class AgentBridge:
             if session_id:
                 channel_type = (context.get("channel_type") or "") if context else ""
                 new_messages = list(getattr(agent, '_last_run_new_messages', []))
-                # The leading user turn was already persisted eagerly above;
-                # drop it here so it isn't stored twice.
-                if pre_persisted and new_messages and new_messages[0].get("role") == "user":
+                # Drop the leading user turn when: it was already persisted
+                # eagerly above (avoid double-store), OR this is a follow-up run
+                # whose user turn is the [SKIP] instruction prompt that must never
+                # enter history. The assistant's actual nudge reply still persists.
+                drop_leading_user = pre_persisted or bool(
+                    context and context.get("is_followup")
+                )
+                if drop_leading_user and new_messages and new_messages[0].get("role") == "user":
                     new_messages = new_messages[1:]
                 if new_messages:
                     self._persist_messages(session_id, list(new_messages), channel_type)
@@ -786,9 +791,13 @@ class AgentBridge:
         """
         if not session_id or not query:
             return False
-        # Only real user turns: skip scheduler-injected / scheduled-task runs.
+        # Only real user turns: skip scheduler-injected / scheduled-task runs and
+        # follow-up nudges. A follow-up "query" is a system instruction that
+        # literally tells the model to output [SKIP] when it decides not to nudge;
+        # persisting it pollutes the working context and trains the model to emit
+        # [SKIP] in ordinary chat (2026-06-15: 沈知 replied [SKIP] to "嗯"/"中午吃什么").
         if session_id.startswith("scheduler_") or (
-            context and context.get("is_scheduled_task")
+            context and (context.get("is_scheduled_task") or context.get("is_followup"))
         ):
             return False
         try:

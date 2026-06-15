@@ -367,9 +367,17 @@ def sanitize_streaming_assistant_text(text: str) -> str:
     return text
 
 
-# 追问回复里模型主动放弃的合法出口标记（prompt 里约定）
-_SKIP_RE = re.compile(r'\[\s*SKIP\s*\]', re.IGNORECASE)
-_CONTROL_PADDING_CHARS = ' \t\r\n"\'`“”‘’（）()【】{}.,，。;；:：!！?？…-—_*/\\|'
+# 追问回复里模型主动放弃的合法出口标记（prompt 里约定）。
+# 兼容半角/全角方括号与嵌套写法（[[SKIP]]、【SKIP】），否则裸标记会漏发给用户
+# （2026-06-15：[[SKIP]] 未被丢弃，直接发到 Telegram）。
+_SKIP_RE = re.compile(r'[\[【]\s*SKIP\s*[\]】]', re.IGNORECASE)
+# The SKIP-bracket characters ([], 【】) are deliberately NOT peeled by the first
+# strip — otherwise `[[SKIP]]`/`【SKIP】` lose their brackets before _SKIP_RE (which
+# requires them) can match, leaving a bare "SKIP" that reads as content.
+_CONTROL_PADDING_CHARS = ' \t\r\n"\'`“”‘’（）(){}.,，。;；:：!！?？…-—_*/\\|'
+# Residual brackets are stripped only AFTER _SKIP_RE.sub removes the marker, so
+# `[[SKIP]]` -> `[]` -> "" and `【[SKIP]】` -> `【】` -> "" both collapse to skip.
+_CONTROL_RESIDUAL_CHARS = _CONTROL_PADDING_CHARS + '[]【】'
 
 
 def control_marker_drop_reason(text: str) -> str:
@@ -387,7 +395,7 @@ def control_marker_drop_reason(text: str) -> str:
     candidate = _MSG_MARKER_RE.sub("", candidate).strip(_CONTROL_PADDING_CHARS)
     if not candidate:
         return ""
-    remainder = _SKIP_RE.sub("", candidate).strip(_CONTROL_PADDING_CHARS)
+    remainder = _SKIP_RE.sub("", candidate).strip(_CONTROL_RESIDUAL_CHARS)
     if not remainder:
         return "skip"
     return ""

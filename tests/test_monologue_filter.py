@@ -121,9 +121,18 @@ def test_control_marker_drop_reason_only_drops_pure_skip():
     assert control_marker_drop_reason(" [MSG] [SKIP] ") == "skip"
     assert control_marker_drop_reason("([skip].)") == "skip"
 
+    # Bracket variants the model sometimes emits must also be dropped, otherwise
+    # they leak to the user as near-blank bubbles (2026-06-15: [[SKIP]] sent to TG).
+    assert control_marker_drop_reason("[[SKIP]]") == "skip"
+    assert control_marker_drop_reason("【SKIP】") == "skip"
+    assert control_marker_drop_reason("【[SKIP]】") == "skip"
+    assert control_marker_drop_reason(" [MSG] [[SKIP]] ") == "skip"
+
     assert control_marker_drop_reason("这里的 [SKIP] 是控制标记") == ""
     assert control_marker_drop_reason("[SKIP] 这个标记表示跳过") == ""
+    assert control_marker_drop_reason("他说了[SKIP]之类的话题") == ""
     assert sanitize_streaming_assistant_text("[SKIP]") == ""
+    assert sanitize_streaming_assistant_text("[[SKIP]]") == ""
 
 
 def test_sanitize_assistant_content_drops_control_marker_text_blocks():
