@@ -17,9 +17,14 @@ _BOUNDARY_TRAIL = _TERMINAL_PUNCT + "」』”’）】》〉)]"
 
 # Defaults; can be overridden via config.json:
 #   message_bubble_max_parts / message_bubble_soft_chars / message_bubble_hard_chars
+#   message_bubble_max_explicit
 DEFAULT_MAX_PARTS = 5
 DEFAULT_SOFT_CHARS = 80
 DEFAULT_HARD_CHARS = 160
+# Absolute cap on how many bubbles explicit [MSG] markers may create. Beyond
+# this the surplus segments are folded into the last allowed bubble so nothing
+# is dropped, but the bubble count can never exceed it.
+DEFAULT_MAX_EXPLICIT = 10
 # Content blocks longer than this are never sentence-split (URLs inside would
 # risk being cut). Short mentions still skip splitting to stay conservative.
 _PROTECTED_MAX_CHARS = 400
@@ -31,7 +36,7 @@ def _bubble_conf():
 
         c = conf()
     except Exception:
-        return DEFAULT_MAX_PARTS, DEFAULT_SOFT_CHARS, DEFAULT_HARD_CHARS, True
+        return DEFAULT_MAX_PARTS, DEFAULT_SOFT_CHARS, DEFAULT_HARD_CHARS, True, DEFAULT_MAX_EXPLICIT
 
     def _int(key, default):
         try:
@@ -43,20 +48,26 @@ def _bubble_conf():
     max_parts = _int("message_bubble_max_parts", DEFAULT_MAX_PARTS)
     soft_chars = _int("message_bubble_soft_chars", DEFAULT_SOFT_CHARS)
     hard_chars = _int("message_bubble_hard_chars", DEFAULT_HARD_CHARS)
+    max_explicit = _int("message_bubble_max_explicit", DEFAULT_MAX_EXPLICIT)
     enabled = bool(c.get("message_bubble_enabled", True))
     if soft_chars > hard_chars:
         soft_chars = hard_chars
-    return max_parts, soft_chars, hard_chars, enabled
+    return max_parts, soft_chars, hard_chars, enabled, max_explicit
 
 
-def _is_protected(text: str) -> bool:
-    """Structured content that must never be sentence-split."""
-    if _URL_RE.search(text) or "![" in text or "[图片" in text or "[视频" in text:
+def _is_structural(text: str) -> bool:
+    """Markdown / code-fence / media blocks that must stay intact as a whole."""
+    if "![" in text or "[图片" in text or "[视频" in text:
         return True
     lines = text.splitlines()
     if any(_FENCE_RE.match(line) for line in lines):
         return True
     return any(_MARKDOWN_LINE_RE.match(line) for line in lines)
+
+
+def _is_protected(text: str) -> bool:
+    """Structured content that must never be sentence-split."""
+    return bool(_URL_RE.search(text)) or _is_structural(text)
 
 
 def _split_sentences(text: str) -> List[str]:
@@ -90,7 +101,9 @@ def _split_implicit_part(text: str) -> List[str]:
     part = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not part:
         return []
-    if _is_protected(part):
+    if _is_structural(part):
+        # Markdown lists, tables, code fences and media blocks span several
+        # lines: keep the whole block as one bubble.
         return [part]
 
     if "\n\n" in part:
@@ -102,7 +115,12 @@ def _split_implicit_part(text: str) -> List[str]:
 
     out: List[str] = []
     for item in base:
-        out.extend(_split_sentences(item))
+        # URL protection is per segment: a link only pins its own segment, the
+        # plain sentences around it still split into their own bubbles.
+        if _is_protected(item):
+            out.append(item)
+        else:
+            out.extend(_split_sentences(item))
     return out or [part]
 
 
@@ -151,7 +169,7 @@ def split_text_bubbles(text: str, max_parts: int = 0) -> List[str]:
     ``max_parts=0`` means "use the configured default"
     (``message_bubble_max_parts``, default 5).
     """
-    conf_max, soft_chars, hard_chars, enabled = _bubble_conf()
+    conf_max, soft_chars, hard_chars, enabled, max_explicit = _bubble_conf()
     limit = max_parts if max_parts > 0 else conf_max
 
     raw = str(text or "")
@@ -161,7 +179,17 @@ def split_text_bubbles(text: str, max_parts: int = 0) -> List[str]:
     elif len(explicit) > 1:
         # Explicit [MSG] markers are the model's hard split decision: never
         # fold them together, even when they outnumber the configured cap.
-        limit = max(limit, len(explicit))
+        # But an absolute ceiling (``max_explicit``) still applies: surplus
+        # segments are appended into the last allowed bubble so no content is
+        # lost while the bubble count never exceeds the ceiling.
+        n = len(explicit)
+        effective = min(n, max_explicit)
+        if n > max_explicit:
+            head = explicit[:max_explicit]
+            overflow = explicit[max_explicit:]
+            head[-1] = head[-1] + "\n" + "\n".join(overflow)
+            explicit = head
+        limit = max(limit, effective)
 
     if not enabled:
         return explicit

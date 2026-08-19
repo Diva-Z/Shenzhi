@@ -125,9 +125,42 @@ def test_english_text_not_sentence_split():
 
 
 def test_disabled_returns_marker_parts(monkeypatch):
-    monkeypatch.setattr(ms, "_bubble_conf", lambda: (5, 80, 160, False))
+    monkeypatch.setattr(ms, "_bubble_conf", lambda: (5, 80, 160, False, 10))
     text = "第一句和第二句都在一段里。[MSG]第二段也有两句。对吧？"
     assert split_text_bubbles(text) == [
         "第一句和第二句都在一段里。",
         "第二段也有两句。对吧？",
     ]
+
+
+# --- explicit-cap and per-segment URL protection ----------------------------
+
+def test_mixed_url_and_plain_text():
+    # A single URL sandwiched between two plain Chinese sentences must not
+    # collapse the whole reply into one bubble: the surrounding sentences
+    # still split, only the URL segment stays intact as its own bubble.
+    text = "我找到了，你看这个。\nhttps://xxx.com/abc?a=1\n不过我觉得第二种方案更适合你。"
+    bubbles = split_text_bubbles(text)
+    assert len(bubbles) >= 2, "message with an inline URL must still split"
+
+    url_bubbles = [b for b in bubbles if "https://xxx.com/abc?a=1" in b]
+    assert len(url_bubbles) == 1
+    assert url_bubbles[0].strip() == "https://xxx.com/abc?a=1"
+
+    joined = "".join(bubbles)
+    assert "我找到了" in joined
+    assert "不过我觉得第二种方案更适合你。" in joined
+
+
+def test_explicit_msg_markers_capped_at_max_explicit():
+    # 20 explicit [MSG] segments must be folded down to at most
+    # message_bubble_max_explicit (default 10), and no content may be dropped:
+    # the surplus text lands in the last allowed bubble.
+    segments = [f"第{n}段。" for n in range(1, 21)]
+    text = "[MSG]".join(segments)
+    bubbles = split_text_bubbles(text)
+
+    assert len(bubbles) <= 10, f"explicit cap breached: {len(bubbles)}"
+    joined = "".join(bubbles)
+    for seg in segments:
+        assert seg in joined, f"segment {seg!r} was dropped by the cap"
