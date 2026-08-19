@@ -29,6 +29,10 @@ from config import conf
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
 
+# Idempotency window for client_msg_id: frontend retries happen within a few
+# seconds (postWithRetry), 10 minutes is generous but bounded.
+_CLIENT_MSG_TTL_SECONDS = 600
+
 def _get_web_password() -> str:
     # Coerce to str so non-string values in config.json (e.g. numeric password) won't break comparisons
     pwd = conf().get("web_password", "")
@@ -241,6 +245,37 @@ class WebChannel(ChatChannel):
         self.request_to_session = {}  # request_id -> session_id
         self.sse_queues = {}  # request_id -> Queue (SSE streaming)
         self._http_server = None
+        # Idempotency: client_msg_id -> (timestamp, request_id, stream).
+        # Frontend retries reuse the same client_msg_id; a duplicate POST
+        # returns the original request_id instead of producing a second run.
+        self.client_msg_cache = OrderedDict()
+        self._client_msg_lock = threading.Lock()
+
+    def _remember_client_msg(self, client_msg_id: str, request_id: str, use_sse: bool):
+        now = time.time()
+        with self._client_msg_lock:
+            self.client_msg_cache[client_msg_id] = (now, request_id, use_sse)
+            # TTL pruning: drop entries older than the retry window.
+            while self.client_msg_cache:
+                oldest_key = next(iter(self.client_msg_cache))
+                if now - self.client_msg_cache[oldest_key][0] <= _CLIENT_MSG_TTL_SECONDS:
+                    break
+                self.client_msg_cache.pop(oldest_key, None)
+
+    def _lookup_client_msg(self, client_msg_id: str):
+        """Return (request_id, stream) if this client_msg_id was seen within
+        the TTL window, else None."""
+        if not client_msg_id:
+            return None
+        with self._client_msg_lock:
+            entry = self.client_msg_cache.get(client_msg_id)
+            if not entry:
+                return None
+            ts, request_id, use_sse = entry
+            if time.time() - ts > _CLIENT_MSG_TTL_SECONDS:
+                self.client_msg_cache.pop(client_msg_id, None)
+                return None
+            return request_id, use_sse
 
     def _generate_msg_id(self):
         """生成唯一的消息ID"""
@@ -814,6 +849,10 @@ class WebChannel(ChatChannel):
             prompt = json_data.get('message', '')
             use_sse = json_data.get('stream', True)
             attachments = json_data.get('attachments', [])
+            # Idempotency key supplied by the frontend. Retries of the same
+            # message must reuse it so a lost HTTP response cannot trigger a
+            # second LLM run / duplicate reply / duplicate SQLite row.
+            client_msg_id = str(json_data.get('client_msg_id') or '').strip()[:128]
             # Tag the message as originating from voice input so the post-reply
             # TTS hook can honour the `voice_if_voice` policy (mirrors the
             # desire_rtype concept used by other channels).
@@ -858,8 +897,30 @@ class WebChannel(ChatChannel):
                     prompt = prompt + "\n" + "\n".join(file_refs)
                     logger.info(f"[WebChannel] Attached {len(file_refs)} file(s) to message")
 
+            # Idempotency: a retry carrying an already-seen client_msg_id
+            # returns the original request_id so the frontend keeps listening
+            # to the first run. Never produce() twice for one user message.
+            dup = self._lookup_client_msg(client_msg_id)
+            if dup is not None:
+                dup_request_id, dup_stream = dup
+                logger.info(
+                    f"[WebChannel] Duplicate client_msg_id={client_msg_id}, "
+                    f"reusing request_id={dup_request_id}"
+                )
+                if dup_stream and dup_request_id not in self.sse_queues:
+                    # Original SSE consumer gone (e.g. page reload); recreate
+                    # so the frontend of this retry can still receive chunks.
+                    self.sse_queues[dup_request_id] = Queue()
+                return json.dumps({
+                    "status": "success",
+                    "request_id": dup_request_id,
+                    "stream": dup_stream,
+                    "duplicate": True,
+                })
+
             request_id = self._generate_request_id()
             self.request_to_session[request_id] = session_id
+            self._remember_client_msg(client_msg_id, request_id, use_sse)
 
             if session_id not in self.session_queues:
                 self.session_queues[session_id] = Queue()
@@ -882,6 +943,10 @@ class WebChannel(ChatChannel):
                 logger.warning(f"[WebChannel] Context is None for session {session_id}, message may be filtered")
                 if request_id in self.sse_queues:
                     del self.sse_queues[request_id]
+                if client_msg_id:
+                    # Nothing was produced; free the idempotency slot.
+                    with self._client_msg_lock:
+                        self.client_msg_cache.pop(client_msg_id, None)
                 return json.dumps({"status": "error", "message": "Message was filtered"})
 
             context["session_id"] = session_id
