@@ -414,7 +414,7 @@ class MemoryManager:
         reason: str = "threshold",
         max_messages: int = 10,
         context_summary_callback=None,
-    ) -> bool:
+    ):
         """
         Flush conversation summary to daily memory file.
 
@@ -427,7 +427,7 @@ class MemoryManager:
                 daily summary text for in-context injection
 
         Returns:
-            True if flush was dispatched
+            The FlushJob for this flush (truthy unless it failed or timed out)
         """
         success = self.flush_manager.flush_from_messages(
             messages=messages,
@@ -436,7 +436,12 @@ class MemoryManager:
             max_messages=max_messages,
             context_summary_callback=context_summary_callback,
         )
-        if success:
+        # Only a real write dirties the index. SKIPPED_NO_CONTENT is now truthy
+        # (nothing was written), so a bare `if success` would over-mark dirty.
+        from agent.memory.flush_job import FlushStatus
+        if hasattr(success, 'status') and success.status == FlushStatus.SUCCESS:
+            self._dirty = True
+        elif not hasattr(success, 'status') and success:  # legacy fallback
             self._dirty = True
         return success
     

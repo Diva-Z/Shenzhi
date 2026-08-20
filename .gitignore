@@ -59,3 +59,4 @@ static/
 run.log
 backups/
 .pytest_cache/
+.pytest_tmp/

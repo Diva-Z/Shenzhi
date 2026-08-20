@@ -4,7 +4,8 @@ Memory flush manager with Deep Dream distillation
 Handles memory persistence when conversation context is trimmed or overflows:
 - Uses LLM to summarize discarded messages into concise daily records
 - Writes to daily memory files (lazy creation)
-- Deduplicates trim flushes to avoid repeated writes
+- Deduplicates trim flushes to avoid repeated writes, with dedup state
+  persisted on disk and only committed after a successful write
 - Runs summarization asynchronously to avoid blocking normal replies
 - Deep Dream: periodically distills daily memories → refined MEMORY.md + dream diary
 """
@@ -14,6 +15,9 @@ from typing import Optional, Callable, Any, List, Dict
 from pathlib import Path
 from datetime import datetime
 from common.log import logger
+from agent.memory.flush_job import FlushJob, FlushStatus
+from agent.memory.pipeline_state import PipelineState
+from agent.memory.coordinator import PersonaMemoryCoordinator
 
 
 SUMMARIZE_SYSTEM_PROMPT_ZH = """你是一个对话记录助手。请将对话内容归纳为当天的日常记录。
@@ -190,6 +194,21 @@ def _is_empty_sentinel(text: str) -> bool:
     return s == "" or s == "无" or s.lower() == "none"
 
 
+def _resolve_date_str(target_date: Optional[str] = None) -> str:
+    """Normalize a YYYY-MM-DD target date, falling back to today.
+
+    Catch-up flushes must write into the *missed* day's file, not today's, so
+    every daily-file helper accepts an explicit date. An unparsable value falls
+    back to today rather than raising inside a background worker.
+    """
+    if target_date:
+        try:
+            return datetime.strptime(target_date, "%Y-%m-%d").strftime("%Y-%m-%d")
+        except Exception:
+            logger.warning(f"[MemoryFlush] Invalid target_date '{target_date}', using today")
+    return datetime.now().strftime("%Y-%m-%d")
+
+
 
 class MemoryFlushManager:
     """
@@ -206,6 +225,7 @@ class MemoryFlushManager:
         self,
         workspace_dir: Path,
         llm_model: Optional[Any] = None,
+        persona_name: Optional[str] = None,
     ):
         self.workspace_dir = workspace_dir
         self.llm_model = llm_model
@@ -214,14 +234,40 @@ class MemoryFlushManager:
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         
         self.last_flush_timestamp: Optional[datetime] = None
-        self._trim_flushed_hashes: set = set()  # Content hashes of already-flushed messages
-        self._last_flushed_content_hash: str = ""  # Content hash at last flush, for daily dedup
-        self._last_dream_input_hash: str = ""  # "{date}:{daily_hash}" of last dream, for dedup
+        # Dedup hashes live in a transactional, disk-backed state so a restart
+        # does not replay already-flushed turns and a failed flush does not
+        # permanently swallow its messages. Shared per memory_dir so sibling
+        # sessions of the same persona don't overwrite each other's state.
+        self._state = PipelineState.get(self.memory_dir)
+        self._persona_name = persona_name or self._infer_persona_name(workspace_dir)
         self._last_flush_thread: Optional[threading.Thread] = None
+
+    @staticmethod
+    def _infer_persona_name(workspace_dir: Path) -> str:
+        """Derive a stable write-lock key from the memory workspace layout.
+
+        Persona workspaces live at ``{agent_workspace}/personas/{persona}``, so
+        the persona name identifies every writer that targets the same daily
+        file. Other scopes (shared workspace, channel dirs, tests) fall back to
+        the workspace path, which is equally stable and keeps unrelated
+        workspaces on separate locks.
+        """
+        try:
+            path = Path(workspace_dir)
+            if path.parent.name == "personas":
+                return path.name
+            return f"workspace:{path}"
+        except Exception:
+            return "default"
     
-    def get_today_memory_file(self, user_id: Optional[str] = None, ensure_exists: bool = False) -> Path:
-        """Get today's memory file path: memory/YYYY-MM-DD.md"""
-        today = datetime.now().strftime("%Y-%m-%d")
+    def get_today_memory_file(
+        self,
+        user_id: Optional[str] = None,
+        ensure_exists: bool = False,
+        target_date: Optional[str] = None,
+    ) -> Path:
+        """Get a daily memory file path: memory/YYYY-MM-DD.md (today by default)."""
+        today = _resolve_date_str(target_date)
         
         if user_id:
             user_dir = self.memory_dir / "users" / user_id
@@ -262,19 +308,37 @@ class MemoryFlushManager:
         reason: str = "trim",
         max_messages: int = 0,
         context_summary_callback: Optional[Callable[[str], None]] = None,
-    ) -> bool:
+        wait: bool = False,
+        target_date: Optional[str] = None,
+        content_hash: Optional[str] = None,
+    ) -> FlushJob:
         """
-        Asynchronously summarize and flush messages to daily memory.
+        Summarize and flush messages to daily memory.
 
         Deduplication runs synchronously, then LLM summarization + file write
         run in a background thread so the main reply flow is never blocked.
+
+        Returns a :class:`FlushJob` whose status reflects what actually
+        happened to the data. With ``wait=False`` (the chat path) the job is
+        returned while still RUNNING; with ``wait=True`` (schedulers and
+        catch-up) the call blocks until the write has landed, so the caller can
+        record success only when the bytes are on disk.
 
         If *context_summary_callback* is provided, it is called with the
         [DAILY] portion of the LLM summary once available. The caller can use
         this to inject the summary into the live message list for context
         continuity — one LLM call serves both disk persistence and in-context
         injection.
+
+        *target_date* (YYYY-MM-DD) routes the write to a past day's file,
+        which the startup catch-up needs when replaying missed dates.
+
+        *content_hash* is the batch hash used for daily-summary dedup; it is
+        staged together with the per-message hashes so it only becomes durable
+        when the write succeeds.
         """
+        job = FlushJob()
+        tx_id = None
         try:
             # Strip scheduler-injected pairs before any further processing.
             # These messages already serve as short-term context inside the
@@ -283,36 +347,52 @@ class MemoryFlushManager:
             # 11:58 price=1013, normal / ...") and wastes summarisation tokens.
             messages = self._strip_scheduler_pairs(messages)
             if not messages:
-                return False
+                job.mark_skipped()
+                return job
 
             import hashlib
             deduped = []
+            new_hashes = set()
             for m in messages:
                 text = self._extract_text_from_content(m.get("content", ""))
                 if not text or not text.strip():
                     continue
                 h = hashlib.md5(text.encode("utf-8")).hexdigest()
-                if h not in self._trim_flushed_hashes:
-                    self._trim_flushed_hashes.add(h)
+                if not self._state.is_trimmed(h) and h not in new_hashes:
+                    new_hashes.add(h)
                     deduped.append(m)
             if not deduped:
-                return False
+                job.mark_skipped()
+                return job
 
             import copy
             snapshot = copy.deepcopy(deduped)
+            # Hashes stay pending until the worker confirms the write. The tx
+            # id scopes commit/rollback to this flush so a sibling flush's
+            # rollback can't clear these hashes.
+            tx_id = self._state.begin(new_trim_hashes=new_hashes, new_content_hash=content_hash)
+            job.message_hashes = new_hashes
             thread = threading.Thread(
                 target=self._flush_worker,
-                args=(snapshot, user_id, reason, max_messages, context_summary_callback),
+                args=(snapshot, user_id, reason, max_messages, context_summary_callback, job, target_date, tx_id),
                 daemon=True,
             )
             thread.start()
             logger.info(f"[MemoryFlush] Async flush dispatched (reason={reason}, msgs={len(snapshot)})")
             self._last_flush_thread = thread
-            return True
+
+            if wait:
+                status = job.wait(timeout=180)
+                if status == FlushStatus.TIMEOUT:
+                    logger.warning(f"[MemoryFlush] Flush timed out after 180s (reason={reason})")
+            return job
 
         except Exception as e:
             logger.warning(f"[MemoryFlush] Failed to dispatch flush (reason={reason}): {e}")
-            return False
+            if tx_id is not None:
+                self._state.rollback(tx_id)
+            job.mark_failed(str(e))
+            return job
 
     def _flush_worker(
         self,
@@ -321,21 +401,30 @@ class MemoryFlushManager:
         reason: str,
         max_messages: int,
         context_summary_callback: Optional[Callable[[str], None]] = None,
+        job: Optional[FlushJob] = None,
+        target_date: Optional[str] = None,
+        tx_id: Optional[str] = None,
     ):
         """Background worker: summarize with LLM, write daily memory file."""
+        job = job or FlushJob()
         try:
+            job.mark_running()
             raw_summary = self._summarize_messages(messages, max_messages)
             if _is_empty_sentinel(raw_summary):
                 logger.info(f"[MemoryFlush] No valuable content to flush (reason={reason})")
+                self._state.rollback(tx_id)
+                job.mark_skipped()
                 return
 
             # Strip legacy [DAILY]/[MEMORY] markers if model still outputs them
             daily_part = self._clean_summary_output(raw_summary)
             if not daily_part:
+                self._state.rollback(tx_id)
+                job.mark_skipped()
                 return
 
             # --- Write daily memory ---
-            daily_file = ensure_daily_memory_file(self.workspace_dir, user_id)
+            daily_file = ensure_daily_memory_file(self.workspace_dir, user_id, target_date)
 
             headers = {
                 "overflow": f"## Context Overflow Recovery ({datetime.now().strftime('%H:%M')})",
@@ -344,10 +433,16 @@ class MemoryFlushManager:
             }
             header = headers.get(reason, f"## Session Notes ({datetime.now().strftime('%H:%M')})")
 
-            with open(daily_file, "a", encoding="utf-8") as f:
-                f.write(f"\n{header}\n\n{daily_part}\n")
+            # Serialize the append: sibling sessions of the same persona write
+            # to the same daily file and would otherwise interleave.
+            PersonaMemoryCoordinator.get(self._persona_name).append_daily(
+                daily_file, f"\n{header}\n\n{daily_part}\n"
+            )
 
             logger.info(f"[MemoryFlush] Wrote daily memory to {daily_file.name} (reason={reason}, chars={len(daily_part)})")
+
+            # Data is durable — the dedup hashes may become permanent.
+            self._state.commit(tx_id)
 
             # --- Inject context summary into live messages (if callback provided) ---
             if context_summary_callback:
@@ -357,9 +452,12 @@ class MemoryFlushManager:
                     logger.warning(f"[MemoryFlush] Context summary callback failed: {e}")
 
             self.last_flush_timestamp = datetime.now()
+            job.mark_success()
 
         except Exception as e:
             logger.warning(f"[MemoryFlush] Async flush failed (reason={reason}): {e}")
+            self._state.rollback(tx_id)
+            job.mark_failed(str(e))
 
     @staticmethod
     def _clean_summary_output(raw: str) -> str:
@@ -386,11 +484,13 @@ class MemoryFlushManager:
     def create_daily_summary(
         self,
         messages: List[Dict],
-        user_id: Optional[str] = None
-    ) -> bool:
+        user_id: Optional[str] = None,
+        wait: bool = False,
+        target_date: Optional[str] = None,
+    ) -> FlushJob:
         """
         Generate end-of-day summary. Called by daily timer.
-        Skips if messages haven't changed since last flush.
+        Skips if messages haven't changed since last successful flush.
         """
         import hashlib
         content = "".join(
@@ -398,15 +498,22 @@ class MemoryFlushManager:
             for m in messages
         )
         content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
-        if content_hash == self._last_flushed_content_hash:
+        if self._state.content_hash_matches(content_hash):
             logger.debug("[MemoryFlush] Daily summary skipped: no new content since last flush")
-            return False
-        self._last_flushed_content_hash = content_hash
+            job = FlushJob()
+            job.mark_skipped()
+            return job
+        # Staged inside the flush call — committed by the worker once the write
+        # succeeds, so a failed summary is retried instead of being deduped
+        # away forever.
         return self.flush_from_messages(
             messages=messages,
             user_id=user_id,
             reason="daily_summary",
             max_messages=0,
+            wait=wait,
+            target_date=target_date,
+            content_hash=content_hash,
         )
 
     # ---- Deep Dream (memory distillation) ----
@@ -441,10 +548,12 @@ class MemoryFlushManager:
         daily_hash = hashlib.md5(daily_content.encode("utf-8")).hexdigest()
         today_str = datetime.now().strftime("%Y-%m-%d")
         dedup_key = f"{today_str}:{daily_hash}"
-        if not force and dedup_key == self._last_dream_input_hash:
+        if not force and self._state.dream_hash_matches(dedup_key):
             logger.info("[DeepDream] Already dreamed today with same daily content, skipping")
             return False
-        self._last_dream_input_hash = dedup_key
+        # Staged: only becomes durable once MEMORY.md is actually rewritten, so
+        # a failed dream is retried on the next trigger.
+        tx_id = self._state.begin(new_dream_hash=dedup_key)
 
         logger.info(
             f"[DeepDream] Materials collected: "
@@ -477,11 +586,13 @@ class MemoryFlushManager:
             elapsed = _time.monotonic() - t0
             if not raw or not raw.strip():
                 logger.warning(f"[DeepDream] LLM returned empty response ({elapsed:.1f}s)")
+                self._state.rollback(tx_id)
                 return False
             logger.info(f"[DeepDream] LLM distillation completed ({elapsed:.1f}s, {len(raw)} chars)")
         except Exception as e:
             elapsed = _time.monotonic() - t0
             logger.warning(f"[DeepDream] LLM call failed ({elapsed:.1f}s): {e}")
+            self._state.rollback(tx_id)
             return False
 
         # Parse [MEMORY] and [DREAM] sections
@@ -489,6 +600,7 @@ class MemoryFlushManager:
 
         if not new_memory:
             logger.warning("[DeepDream] No [MEMORY] section in LLM output, skipping overwrite")
+            self._state.rollback(tx_id)
             return False
 
         # Overwrite MEMORY.md
@@ -502,7 +614,11 @@ class MemoryFlushManager:
             )
         except Exception as e:
             logger.warning(f"[DeepDream] Failed to write MEMORY.md: {e}")
+            self._state.rollback(tx_id)
             return False
+
+        # MEMORY.md is on disk — the dream dedup key may become durable.
+        self._state.commit(tx_id)
 
         # Write dream diary
         if dream_diary:
@@ -816,22 +932,28 @@ def create_memory_files_if_needed(workspace_dir: Path, user_id: Optional[str] = 
         main_memory.write_text("")
 
 
-def ensure_daily_memory_file(workspace_dir: Path, user_id: Optional[str] = None) -> Path:
+def ensure_daily_memory_file(
+    workspace_dir: Path,
+    user_id: Optional[str] = None,
+    target_date: Optional[str] = None,
+) -> Path:
     """
-    Ensure today's daily memory file exists, creating it only when actually needed.
+    Ensure a daily memory file exists, creating it only when actually needed.
     Called lazily before first write to daily memory.
     
     Args:
         workspace_dir: Workspace directory
         user_id: Optional user ID for user-specific files
+        target_date: Optional YYYY-MM-DD date; defaults to today. Catch-up
+            flushes pass the missed date so content lands in that day's file.
         
     Returns:
-        Path to today's memory file
+        Path to the daily memory file
     """
     memory_dir = workspace_dir / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
     
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _resolve_date_str(target_date)
     if user_id:
         user_dir = memory_dir / "users" / user_id
         user_dir.mkdir(parents=True, exist_ok=True)

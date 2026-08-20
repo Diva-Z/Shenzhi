@@ -56,6 +56,8 @@
   "group_name_white_list": ["ALL_GROUP"],
   "clear_memory_commands": ["#清除记忆"],
 
+  "catchup_days": 3,
+
   "message_bubble_enabled": true,
   "message_bubble_max_parts": 5,
   "message_bubble_soft_chars": 80,
@@ -110,6 +112,6 @@
     }
   },
   "knowledge": true,
-  "self_evolution_enabled": true,
+  "self_evolution_enabled": false,
   "debug": false
 }
