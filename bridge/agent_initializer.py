@@ -317,6 +317,19 @@ class AgentInitializer:
         if session_id:
             self._restore_conversation_history(agent, session_id)
 
+        # Cross-channel identity: tag the agent with its canonical identity_id
+        # (when enabled and a binding exists) for downstream unified search.
+        if session_id and conf().get("cross_channel_identity_enabled", False):
+            try:
+                from agent.memory import get_identity_manager
+                identity_mgr = get_identity_manager()
+                identity_id = identity_mgr.resolve_identity(session_id, channel_id or "")
+                if identity_id:
+                    agent.identity_id = identity_id
+            except Exception as e:
+                logger.debug(f"[AgentInitializer] identity resolution skipped: {e}")
+
+
         # Catch up a daily flush that was missed while the process was down
         # (e.g. machine off at 23:5x). Runs at most once per process.
         self._maybe_catchup_flush(agent)

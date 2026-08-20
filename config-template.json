@@ -18,6 +18,7 @@
   "conversation_persistence": true,
   "conversation_max_age_days": 30,
   "conversation_restore_turns": 10,
+  "cross_channel_identity_enabled": false,
 
   "model": "deepseek-v4-flash",
   "bot_type": "deepseek",
