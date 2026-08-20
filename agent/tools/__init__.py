@@ -15,6 +15,7 @@ from agent.tools.memory.memory_search import MemorySearchTool
 from agent.tools.memory.memory_get import MemoryGetTool
 from agent.tools.memory.conversation_search import ConversationSearchTool
 from agent.tools.memory.conversation_get import ConversationGetTool
+from agent.tools.memory.hybrid_recall import HybridRecallTool
 
 # Import self-evolution tools
 from agent.tools.evolution_undo.evolution_undo import EvolutionUndoTool
@@ -142,6 +143,7 @@ __all__ = [
     'MemoryGetTool',
     'ConversationSearchTool',
     'ConversationGetTool',
+    'HybridRecallTool',
     'EvolutionUndoTool',
     'EnvConfig',
     'SchedulerTool',

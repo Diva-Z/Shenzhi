@@ -20,6 +20,10 @@
   "conversation_restore_turns": 10,
   "cross_channel_identity_enabled": false,
 
+  "hybrid_recall_enabled": true,
+  "hybrid_recall_max_dates": 3,
+  "hybrid_recall_max_messages": 20,
+
   "model": "deepseek-v4-flash",
   "bot_type": "deepseek",
   "temperature": 0.9,

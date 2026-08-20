@@ -400,9 +400,11 @@ def _build_memory_section(memory_manager: Any, tools: Optional[List[Any]], langu
         return []
 
     has_memory_tools = False
+    has_hybrid_recall = False
     if tools:
         tool_names = [tool.name if hasattr(tool, 'name') else str(tool) for tool in tools]
         has_memory_tools = any(name in ['memory_search', 'memory_get'] for name in tool_names)
+        has_hybrid_recall = 'hybrid_recall' in tool_names
 
     if not has_memory_tools:
         return []
@@ -411,6 +413,17 @@ def _build_memory_section(memory_manager: Any, tools: Optional[List[Any]], langu
     today_file = datetime.now().strftime("%Y-%m-%d") + ".md"
 
     if language == "en":
+        recall_steps = [
+            "1. Location unknown → `memory_search` (keyword / semantic search)",
+            "2. Location known → `memory_get` to read the exact lines",
+            "3. Search returns nothing → `memory_get` to read the last two days of memory",
+            "4. Exact chat wording needed → `conversation_search` → `conversation_get`",
+        ]
+        if has_hybrid_recall:
+            recall_steps.append(
+                "5. Both summary context and exact original words needed → `hybrid_recall` "
+                "(one step: positions the relevant dates via memory search, then pulls the raw conversation from them)"
+            )
         lines = [
             "## 🧠 Memory",
             "",
@@ -420,10 +433,7 @@ def _build_memory_section(memory_manager: Any, tools: Optional[List[Any]], langu
             "No need to re-search if the info is already in MEMORY.md. Full content and daily memory must be retrieved via tools.",
             "When the user asks for exact previous wording, whether something was said, or what they/you said at a specific time, use `conversation_search` first, then `conversation_get` to verify the surrounding original messages before answering.",
             "",
-            "1. Location unknown → `memory_search` (keyword / semantic search)",
-            "2. Location known → `memory_get` to read the exact lines",
-            "3. Search returns nothing → `memory_get` to read the last two days of memory",
-            "4. Exact chat wording needed → `conversation_search` → `conversation_get`",
+            *recall_steps,
             "",
             "**Memory file structure**:",
             "- `MEMORY.md`: long-term memory index (already auto-loaded into context: core info, preferences, decisions, etc.)",
@@ -452,6 +462,17 @@ def _build_memory_section(memory_manager: Any, tools: Optional[List[Any]], langu
             "",
         ]
     else:
+        recall_steps_zh = [
+            "1. 不确定位置 → `memory_search` 关键词/语义检索",
+            "2. 已知位置 → `memory_get` 直接读取对应行",
+            "3. search 无结果 → `memory_get` 读最近两天记忆",
+            "4. 需要原话证据 → `conversation_search` → `conversation_get`",
+        ]
+        if has_hybrid_recall:
+            recall_steps_zh.append(
+                "5. 既要事件脉络又要原话 → `hybrid_recall`"
+                "（一步完成：先用记忆检索定位相关日期，再取出那几天的原始对话）"
+            )
         lines = [
             "## 🧠 记忆系统",
             "",
@@ -461,10 +482,7 @@ def _build_memory_section(memory_manager: Any, tools: Optional[List[Any]], langu
             "如果 MEMORY.md 中已有相关信息则无需重复检索。完整内容和每日记忆需要通过工具检索。",
             "当用户询问以前某句话的原文、是否说过某事、某天/某次对话里你或用户具体说了什么时，必须先用 `conversation_search` 搜索原始聊天记录，再用 `conversation_get` 核对上下文后回答。",
             "",
-            "1. 不确定位置 → `memory_search` 关键词/语义检索",
-            "2. 已知位置 → `memory_get` 直接读取对应行",
-            "3. search 无结果 → `memory_get` 读最近两天记忆",
-            "4. 需要原话证据 → `conversation_search` → `conversation_get`",
+            *recall_steps_zh,
             "",
             "**记忆文件结构**:",
             "- `MEMORY.md`: 长期记忆索引（已自动加载到上下文，核心信息、偏好、决策等）",
