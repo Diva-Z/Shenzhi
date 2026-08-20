@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     context_start_seq INTEGER NOT NULL DEFAULT 0,
     created_at        INTEGER NOT NULL,
     last_active       INTEGER NOT NULL,
-    msg_count         INTEGER NOT NULL DEFAULT 0
+    msg_count         INTEGER NOT NULL DEFAULT 0,
+    identity_id       TEXT    DEFAULT NULL
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -77,6 +78,11 @@ ALTER TABLE sessions ADD COLUMN context_start_seq INTEGER NOT NULL DEFAULT 0;
 # Always optional — readers must tolerate missing column / empty / invalid JSON.
 _MIGRATION_ADD_MSG_EXTRAS = """
 ALTER TABLE messages ADD COLUMN extras TEXT NOT NULL DEFAULT '';
+"""
+
+# Cross-channel identity: links a session to a canonical identity_id.
+_MIGRATION_ADD_IDENTITY_ID = """
+ALTER TABLE sessions ADD COLUMN identity_id TEXT DEFAULT NULL;
 """
 
 DEFAULT_MAX_AGE_DAYS: int = 30
@@ -738,6 +744,24 @@ class ConversationStore:
             finally:
                 conn.close()
 
+        # Auto-binding: once the session row exists, opportunistically link it
+        # to a cross-channel identity if a binding for its external id already
+        # exists. Runs after the write connection is closed so we never nest a
+        # second writer inside the transaction above. Best-effort — any failure
+        # here must never break message persistence.
+        try:
+            from config import conf
+
+            if conf().get("cross_channel_identity_enabled", False):
+                from agent.memory import get_identity_manager
+
+                mgr = get_identity_manager()
+                # Caches identity_id into the sessions table when a binding exists.
+                mgr.resolve_identity(session_id, channel_type)
+        except Exception as e:
+            logger.debug(f"[ConversationStore] identity auto-bind skipped: {e}")
+
+
     def clear_context(self, session_id: str) -> int:
         """
         Set the context boundary to after the current last message.
@@ -1157,6 +1181,7 @@ class ConversationStore:
         created_after: Optional[int] = None,
         created_before: Optional[int] = None,
         limit: int = 10,
+        session_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Search raw persisted conversation messages.
@@ -1165,6 +1190,11 @@ class ConversationStore:
         files. It searches the original ``messages`` table and returns stable
         ``session_id`` + ``seq`` anchors that can be passed to
         ``load_message_context`` for neighbouring turns.
+
+        ``session_id`` (singular) scopes the search to one session.
+        ``session_ids`` (plural) scopes it to several sessions at once — used
+        by cross-channel identity search. When both are given, ``session_ids``
+        takes precedence.
         """
         terms = _conversation_search_terms(query)
         if not terms:
@@ -1175,9 +1205,16 @@ class ConversationStore:
 
         where = []
         params: List[Any] = []
-        if session_id:
+        # Prefer the plural form when provided; expand to an IN (...) clause.
+        session_id_list = [s for s in (session_ids or []) if s]
+        if session_id_list:
+            placeholders = ",".join("?" for _ in session_id_list)
+            where.append(f"m.session_id IN ({placeholders})")
+            params.extend(session_id_list)
+        elif session_id:
             where.append("m.session_id = ?")
             params.append(session_id)
+
         if role in ("user", "assistant"):
             where.append("m.role = ?")
             params.append(role)
@@ -1616,6 +1653,17 @@ class ConversationStore:
                 logger.info("[ConversationStore] Migrated: added context_start_seq column")
             except Exception as e:
                 logger.warning(f"[ConversationStore] Migration (context_start_seq) failed: {e}")
+        if "identity_id" not in cols:
+            try:
+                conn.execute(_MIGRATION_ADD_IDENTITY_ID)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_sessions_identity "
+                    "ON sessions (identity_id)"
+                )
+                conn.commit()
+                logger.info("[ConversationStore] Migrated: added identity_id column")
+            except Exception as e:
+                logger.warning(f"[ConversationStore] Migration (identity_id) failed: {e}")
 
         msg_cols = {
             row[1]
