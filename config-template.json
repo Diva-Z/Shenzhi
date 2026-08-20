@@ -56,6 +56,11 @@
   "group_name_white_list": ["ALL_GROUP"],
   "clear_memory_commands": ["#清除记忆"],
 
+  "message_bubble_enabled": true,
+  "message_bubble_max_parts": 5,
+  "message_bubble_soft_chars": 80,
+  "message_bubble_hard_chars": 160,
+
   "followup_first_sec": [10800, 14400],
   "followup_repeat_sec": [21600, 28800],
   "followup_max_count": 0,

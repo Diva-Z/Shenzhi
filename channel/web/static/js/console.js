@@ -1872,6 +1872,16 @@ document.querySelectorAll('.example-card').forEach(card => {
     });
 });
 
+// Idempotency key for /message: generated once per user action; the retry
+// loop resends the same body (same client_msg_id), so the backend can dedupe
+// a retry whose previous response was lost on the network.
+function newClientMsgId() {
+    try {
+        if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    } catch (e) { /* fall through to manual id */ }
+    return 'cmsg-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
 // Voice-message variant of sendMessage(): renders a playable audio bubble
 // with the ASR caption, then dispatches the recognised text to /message
 // through the same SSE/loading flow as a typed message.
@@ -1899,6 +1909,7 @@ function sendVoiceMessage(text, audioUrl) {
         timestamp: timestamp.toISOString(),
         is_voice: true,
         lang: currentLang,
+        client_msg_id: newClientMsgId(),
     };
 
     const MAX_RETRIES = 2;
@@ -2096,7 +2107,7 @@ async function regenerateResponse(botMsgEl) {
 
     // Resend the message
     const timestamp = new Date();
-    const body = { session_id: sessionId, message: userContent, stream: true, timestamp: timestamp.toISOString(), lang: currentLang };
+    const body = { session_id: sessionId, message: userContent, stream: true, timestamp: timestamp.toISOString(), lang: currentLang, client_msg_id: newClientMsgId() };
 
     const MAX_RETRIES = 2;
     const RETRY_DELAY_MS = 1000;
@@ -2179,7 +2190,7 @@ function sendMessage() {
     renderAttachmentPreview();
     sendBtn.disabled = true;
 
-    const body = { session_id: sessionId, message: text, stream: true, timestamp: timestamp.toISOString(), lang: currentLang };
+    const body = { session_id: sessionId, message: text, stream: true, timestamp: timestamp.toISOString(), lang: currentLang, client_msg_id: newClientMsgId() };
     if (attachments.length > 0) {
         body.attachments = attachments.map(a => ({
             file_path: a.file_path,
