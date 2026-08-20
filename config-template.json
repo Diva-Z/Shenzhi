@@ -17,6 +17,7 @@
   "reasoning_effort": "high",
   "conversation_persistence": true,
   "conversation_max_age_days": 30,
+  "conversation_restore_turns": 10,
 
   "model": "deepseek-v4-flash",
   "bot_type": "deepseek",

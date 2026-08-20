@@ -356,7 +356,14 @@ class AgentInitializer:
             if session_id.startswith("scheduler_"):
                 restore_turns = max(1, max_turns // 5)
             else:
-                restore_turns = max(3, max_turns // 6)
+                # Regular chat sessions restore an explicit number of recent
+                # turns so the companion keeps meaningful continuity on restart
+                # (the old max(3, max_turns//6) heuristic gave only ~3 turns).
+                # NOTE: this is turn-count based only. load_messages has no
+                # token-budget truncation, so a conversation_restore_token_budget
+                # would require reworking load_messages / _restore_conversation_history
+                # and is intentionally left as a possible follow-up.
+                restore_turns = conf().get("conversation_restore_turns", 10)
             saved = store.load_messages(session_id, max_turns=restore_turns)
             if saved:
                 filtered = self._filter_text_only_messages(saved)

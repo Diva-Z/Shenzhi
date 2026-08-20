@@ -518,9 +518,10 @@ class TelegramChannel(ChatChannel):
                 context["receiver"] = str(chat.id)
                 context["telegram_chat_id"] = chat.id
                 context["telegram_reply_to_msg_id"] = message.message_id if is_group else None
-                self.produce(context)
-                # Follow-up tracking: user replied, reset pending state
-                self._last_update_received = datetime.now()
+                # Follow-up tracking: user replied, reset pending state.
+                # Update _last_user_msg_time BEFORE produce() to close the race
+                # window where a followup could fire against a message that was
+                # already superseded by this new user message.
                 if not is_group:
                     str_cid = str(chat.id)
                     # A "去忙了 / 待会聊" style message ends the chat -> stop nudging
@@ -531,6 +532,8 @@ class TelegramChannel(ChatChannel):
                         self._followup_fired[str_cid] = False
                         self._followup_stopped[str_cid] = terminating
                         self._followup_count[str_cid] = 0
+                self.produce(context)
+                self._last_update_received = datetime.now()
             logger.debug(f"[Telegram] received: type={ctype}, content={str(tg_msg.content)[:80]}")
 
         except Exception as e:
@@ -788,6 +791,14 @@ class TelegramChannel(ChatChannel):
             context["channel_type"] = self.channel_type
             context["isgroup"] = False
             context["is_followup"] = True
+            # Re-check: user may have spoken between the decision to nudge and
+            # actually executing produce(). If so, cancel the followup.
+            with self._followup_lock:
+                last_user = self._last_user_msg_time.get(chat_id)
+                sent_at = self._last_bot_msg_time.get(chat_id)
+                if last_user and sent_at and last_user >= sent_at:
+                    logger.info(f"[Followup] cancelled for {chat_id}: user spoke after bot")
+                    return
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, lambda: self.produce(context))
         except Exception as e:
