@@ -658,8 +658,10 @@ class WeixinChannel(ChatChannel):
             no_need_at=True,
         )
         if context:
-            self.produce(context)
-            # Follow-up tracking: user replied, reset pending state
+            # Follow-up tracking: user replied, reset pending state.
+            # Update _last_user_msg_time BEFORE produce() to close the race
+            # window where a followup could fire against a message that was
+            # already superseded by this new user message.
             str_uid = str(from_user)
             terminating = _is_terminating_message(str(getattr(wx_msg, "content", "") or ""))
             with self._followup_lock:
@@ -667,6 +669,7 @@ class WeixinChannel(ChatChannel):
                 self._followup_fired[str_uid] = False
                 self._followup_stopped[str_uid] = terminating
                 self._followup_count[str_uid] = 0
+            self.produce(context)
 
     # ── _compose_context ───────────────────────────────────────────────
 
@@ -898,6 +901,14 @@ class WeixinChannel(ChatChannel):
             context["channel_type"] = self.channel_type
             context["isgroup"] = False
             context["is_followup"] = True
+            # Re-check: user may have spoken between the decision to nudge and
+            # actually executing produce(). If so, cancel the followup.
+            with self._followup_lock:
+                last_user = self._last_user_msg_time.get(user_id)
+                sent_at = self._last_bot_msg_time.get(user_id)
+                if last_user and sent_at and last_user >= sent_at:
+                    logger.info(f"[Followup] cancelled for {user_id}: user spoke after bot")
+                    return
             self.produce(context)
         except Exception as e:
             logger.error(f"[Weixin] Failed to trigger followup for {user_id}: {e}")
