@@ -241,6 +241,11 @@ class MemoryFlushManager:
         self._state = PipelineState.get(self.memory_dir)
         self._persona_name = persona_name or self._infer_persona_name(workspace_dir)
         self._last_flush_thread: Optional[threading.Thread] = None
+        # Optional hook invoked with the daily file Path after a successful
+        # write. MemoryManager wires this to its index_file() so the fresh
+        # summary becomes searchable immediately. Left None for standalone
+        # flush managers (CLI, tests), which have no index to update.
+        self.index_callback: Optional[Callable[[Path], Any]] = None
 
     @staticmethod
     def _infer_persona_name(workspace_dir: Path) -> str:
@@ -444,6 +449,11 @@ class MemoryFlushManager:
             # Data is durable — the dedup hashes may become permanent.
             self._state.commit(tx_id)
 
+            # Incrementally re-index the updated daily file so hybrid_recall
+            # and memory_search can find this summary right away. Best-effort:
+            # a failed index never invalidates a write that already landed.
+            self._reindex_daily(daily_file)
+
             # --- Inject context summary into live messages (if callback provided) ---
             if context_summary_callback:
                 try:
@@ -458,6 +468,15 @@ class MemoryFlushManager:
             logger.warning(f"[MemoryFlush] Async flush failed (reason={reason}): {e}")
             self._state.rollback(tx_id)
             job.mark_failed(str(e))
+
+    def _reindex_daily(self, daily_file: Path):
+        """Best-effort incremental re-index of a just-written daily file."""
+        if not self.index_callback:
+            return
+        try:
+            self.index_callback(daily_file)
+        except Exception as e:
+            logger.warning(f"[MemoryFlush] Incremental index failed for {daily_file.name}: {e}")
 
     @staticmethod
     def _clean_summary_output(raw: str) -> str:

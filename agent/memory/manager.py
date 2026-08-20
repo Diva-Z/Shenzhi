@@ -72,6 +72,10 @@ class MemoryManager:
             workspace_dir=workspace_dir,
             llm_model=llm_model
         )
+        # Re-index the daily file right after a flush writes it, so freshly
+        # summarized events are searchable without waiting for the next
+        # sync_on_search pass (which only fires on the *following* query).
+        self.flush_manager.index_callback = self.index_file
         
         # Ensure workspace directories exist
         self._init_workspace()
@@ -406,6 +410,121 @@ class MemoryManager:
             )
 
         self._dirty = False
+
+    def index_file(self, file_path) -> bool:
+        """
+        Index a single memory file immediately.
+
+        Lightweight counterpart to :meth:`sync`: chunks and embeds one file
+        instead of walking the whole workspace. Used right after a flush
+        appends to ``memory/YYYY-MM-DD.md`` so the new content is searchable
+        on the very next query.
+
+        Args:
+            file_path: Absolute or workspace-relative path to a .md file
+
+        Returns:
+            True when the file was indexed, False when it was skipped
+            (missing, empty, unchanged) or the embedding call failed.
+        """
+        from common.log import logger
+
+        workspace_dir = Path(self.config.get_workspace())
+        path = Path(file_path)
+        if not path.is_absolute():
+            path = workspace_dir / path
+
+        if not path.exists():
+            logger.warning(f"[MemoryManager] index_file: {path} does not exist")
+            return False
+
+        try:
+            content = path.read_text(encoding='utf-8')
+        except Exception as e:
+            logger.warning(f"[MemoryManager] index_file: cannot read {path}: {e}")
+            return False
+
+        try:
+            rel_path = str(path.relative_to(workspace_dir))
+        except ValueError:
+            # Outside the memory workspace — indexing it would produce a path
+            # that memory_get cannot resolve back to a file.
+            logger.warning(f"[MemoryManager] index_file: {path} is outside {workspace_dir}")
+            return False
+
+        file_hash = MemoryStorage.compute_hash(content)
+        if self.storage.get_file_hash(rel_path) == file_hash:
+            return False
+
+        chunks = self.chunker.chunk_text(content)
+        if not chunks:
+            return False
+
+        texts = [c.text for c in chunks]
+        if not self.embedding_provider:
+            embeddings: List[Optional[List[float]]] = [None] * len(texts)
+        else:
+            try:
+                embeddings = self.embedding_provider.embed_batch(texts)
+            except Exception as e:
+                # Same contract as sync(): never touch the index without
+                # valid vectors, leave the file for the next sync to retry.
+                logger.warning(
+                    f"[MemoryManager] index_file: embedding failed for {rel_path}: {e}. "
+                    f"Index left untouched."
+                )
+                self._dirty = True
+                return False
+
+        scope, user_id = self._resolve_scope(path, workspace_dir)
+
+        self.storage.delete_by_path(rel_path)
+        memory_chunks = []
+        for chunk, embedding in zip(chunks, embeddings):
+            memory_chunks.append(MemoryChunk(
+                id=self._generate_chunk_id(rel_path, chunk.start_line, chunk.end_line),
+                user_id=user_id,
+                scope=scope,
+                source="memory",
+                path=rel_path,
+                start_line=chunk.start_line,
+                end_line=chunk.end_line,
+                text=chunk.text,
+                embedding=embedding,
+                hash=MemoryStorage.compute_hash(chunk.text),
+                metadata=None,
+            ))
+        self.storage.save_chunks_batch(memory_chunks)
+
+        stat = path.stat()
+        self.storage.update_file_metadata(
+            path=rel_path,
+            source="memory",
+            file_hash=file_hash,
+            mtime=int(stat.st_mtime),
+            size=stat.st_size,
+        )
+        logger.info(f"[MemoryManager] Incrementally indexed {rel_path} ({len(memory_chunks)} chunks)")
+        return True
+
+    @staticmethod
+    def _resolve_scope(file_path: Path, workspace_dir: Path) -> tuple:
+        """Derive (scope, user_id) from a memory file's location.
+
+        Mirrors the layout rules sync() applies: files under
+        ``memory/users/{uid}/`` are user-scoped, everything else is shared.
+        """
+        try:
+            rel_parts = file_path.relative_to(workspace_dir).parts
+        except ValueError:
+            return ("shared", None)
+
+        if "users" in rel_parts:
+            user_idx = rel_parts.index("users") + 1
+            user_id = rel_parts[user_idx] if user_idx < len(rel_parts) - 1 else None
+            if user_id:
+                return ("user", user_id)
+        return ("shared", None)
 
     def flush_memory(
         self,

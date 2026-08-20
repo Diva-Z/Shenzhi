@@ -297,6 +297,36 @@ def test_flush_commits_state_and_writes_file(tmp_path):
     assert PipelineState(tmp_path / "memory").is_trimmed(next(iter(job.message_hashes)))
 
 
+def test_flush_triggers_incremental_index(tmp_path):
+    """A successful write re-indexes the daily file so recall sees it at once."""
+    manager = _manager(tmp_path, _FakeLLM())
+    indexed = []
+    manager.index_callback = indexed.append
+
+    job = manager.flush_from_messages(MESSAGES, reason="trim", wait=True)
+
+    assert job.status is FlushStatus.SUCCESS
+    today = datetime.date.today().isoformat()
+    assert indexed == [tmp_path / "memory" / f"{today}.md"]
+
+
+def test_flush_index_failure_does_not_fail_flush(tmp_path):
+    """Indexing is best-effort: a broken index must not undo a landed write."""
+    manager = _manager(tmp_path, _FakeLLM())
+
+    def _boom(_path):
+        raise RuntimeError("index on fire")
+
+    manager.index_callback = _boom
+
+    job = manager.flush_from_messages(MESSAGES, reason="trim", wait=True)
+
+    assert job.status is FlushStatus.SUCCESS
+    today = datetime.date.today().isoformat()
+    assert (tmp_path / "memory" / f"{today}.md").exists()
+    assert all(manager._state.is_trimmed(h) for h in job.message_hashes)
+
+
 def test_flush_writes_to_target_date_file(tmp_path):
     manager = _manager(tmp_path, _FakeLLM())
 

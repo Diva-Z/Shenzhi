@@ -511,7 +511,7 @@ class AgentInitializer:
 
         try:
             from agent.memory import MemoryManager, MemoryConfig
-            from agent.tools import MemorySearchTool, MemoryGetTool
+            from agent.tools import MemorySearchTool, MemoryGetTool, HybridRecallTool
             from config import conf
 
             # Use channel-specific workspace for all memory files when set,
@@ -530,6 +530,11 @@ class AgentInitializer:
                 MemorySearchTool(memory_manager),
                 MemoryGetTool(memory_manager)
             ]
+
+            # Hybrid recall chains memory search with raw conversation retrieval
+            # in one step; opt-out for deployments that prefer manual chaining.
+            if conf().get("hybrid_recall_enabled", True):
+                memory_tools.append(HybridRecallTool(memory_manager))
             
             if session_id is None:
                 logger.info("[AgentInitializer] Memory system initialized")

@@ -119,7 +119,7 @@ class ToolManager:
                             ):
                                 try:
                                     # Skip tools that need special initialization
-                                    if class_name in ["MemorySearchTool", "MemoryGetTool"]:
+                                    if class_name in ["MemorySearchTool", "MemoryGetTool", "HybridRecallTool"]:
                                         logger.debug(f"Skipped tool {class_name} (requires memory_manager)")
                                         continue
                                     # McpTool instances are registered dynamically via _load_mcp_tools()
@@ -194,7 +194,7 @@ class ToolManager:
                         ):
                             try:
                                 # Skip memory tools (they need special initialization with memory_manager)
-                                if attr_name in ["MemorySearchTool", "MemoryGetTool"]:
+                                if attr_name in ["MemorySearchTool", "MemoryGetTool", "HybridRecallTool"]:
                                     logger.debug(f"Skipped tool {attr_name} (requires memory_manager)")
                                     continue
                                 
