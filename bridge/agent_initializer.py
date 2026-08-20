@@ -988,8 +988,15 @@ class AgentInitializer:
                     logger.info(f"[DailyFlush] Next flush at {target.strftime('%Y-%m-%d %H:%M:%S')} (in {wait_seconds/3600:.1f}h)")
                     time.sleep(wait_seconds)
 
-                    self._flush_all_agents()
-                    self._record_flush_date()
+                    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+                    # Only record the date when the data actually reached disk,
+                    # otherwise the startup catch-up would think the day was
+                    # already flushed and silently drop it.
+                    success = self._flush_all_agents(target_date=today_str)
+                    if success:
+                        self._record_flush_date()
+                    else:
+                        logger.error("[DailyFlush] Daily flush failed; date not recorded, will retry via catch-up")
                     last_run_date = datetime.datetime.now().date()
                 except Exception as e:
                     logger.warning(f"[DailyFlush] Error in daily flush loop: {e}")
@@ -1008,28 +1015,70 @@ class AgentInitializer:
             return os.path.join(workspace, "personas", persona, "memory", ".daily_flush_state.json")
         return os.path.join(workspace, "memory", ".daily_flush_state.json")
 
+    def _read_flush_state(self) -> dict:
+        """Read the daily-flush state file.
+
+        Schema: ``{"last_flush_date": "YYYY-MM-DD", "failed_dates": [...]}``.
+        A missing or corrupt file yields an empty state, which makes the
+        catch-up treat only yesterday as potentially missed.
+        """
+        import json as _json
+        try:
+            with open(self._flush_state_file(), "r", encoding="utf-8") as f:
+                data = _json.load(f)
+            if not isinstance(data, dict):
+                return {}
+            failed = data.get("failed_dates")
+            return {
+                "last_flush_date": data.get("last_flush_date", "") or "",
+                "failed_dates": [d for d in failed if isinstance(d, str)] if isinstance(failed, list) else [],
+            }
+        except Exception:
+            return {}
+
+    def _write_flush_state(self, last_flush_date: str, failed_dates=None) -> None:
+        """Persist the daily-flush state, keeping the failed-date list bounded."""
+        import json as _json
+        try:
+            path = self._flush_state_file()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            payload = {
+                "last_flush_date": last_flush_date,
+                "failed_dates": sorted(set(failed_dates or []))[-30:],
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                _json.dump(payload, f)
+        except Exception as e:
+            logger.warning(f"[DailyFlush] Failed to record flush state: {e}")
+
     def _record_flush_date(self, d=None):
         """Persist the date of the last successful daily flush so a startup
         catch-up can tell whether a scheduled flush was missed."""
         import datetime as _dt
-        import json as _json
+        d = d or _dt.date.today()
+        date_str = d.isoformat() if hasattr(d, "isoformat") else str(d)
+        state = self._read_flush_state()
+        failed = [x for x in state.get("failed_dates", []) if x != date_str]
+        self._write_flush_state(date_str, failed)
+
+    @staticmethod
+    def _catchup_days() -> int:
+        """How many missed days the startup catch-up may replay (1..7)."""
         try:
-            d = d or _dt.date.today()
-            path = self._flush_state_file()
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                _json.dump({"last_flush_date": d.isoformat()}, f)
-        except Exception as e:
-            logger.warning(f"[DailyFlush] Failed to record flush date: {e}")
+            from config import conf
+            days = int(conf().get("catchup_days", 3) or 3)
+        except Exception:
+            days = 3
+        return max(1, min(days, 7))
 
     def _maybe_catchup_flush(self, agent):
-        """Run a one-shot daily flush at startup when the previous day's
-        scheduled flush was missed (process was down at 23:5x).
+        """Replay daily flushes that were missed while the process was down.
 
-        Reuses the freshly-built agent's flush_manager (LLM already attached on
-        line ~122) and the conversation just restored from the store, so a day's
-        memory isn't silently lost when the machine is off overnight. Runs at
-        most once per process and only when a flush was actually missed.
+        Each missed date is summarized from the conversation store (not from
+        ``agent.messages``, which only holds the few restored turns) and written
+        into *that date's* memory file. ``last_flush_date`` only advances for
+        dates that actually succeeded, so a failure is retried on the next
+        start instead of being lost. Runs at most once per process.
         """
         try:
             if getattr(self.agent_bridge, "_catchup_flush_done", False):
@@ -1038,59 +1087,138 @@ class AgentInitializer:
                 return
 
             import datetime as _dt
-            import json as _json
             import threading as _th
 
             today = _dt.date.today()
-            last_flush = None
+            yesterday = today - _dt.timedelta(days=1)
+            state = self._read_flush_state()
+            raw_last = state.get("last_flush_date", "")
             try:
-                with open(self._flush_state_file(), "r", encoding="utf-8") as f:
-                    raw = _json.load(f).get("last_flush_date", "")
-                last_flush = _dt.date.fromisoformat(raw) if raw else None
+                last_flush = _dt.date.fromisoformat(raw_last) if raw_last else None
             except Exception:
                 last_flush = None
 
             # Nothing missed if we already flushed yesterday or later.
-            if last_flush is not None and last_flush >= today - _dt.timedelta(days=1):
+            if last_flush is not None and last_flush >= yesterday:
                 self.agent_bridge._catchup_flush_done = True
                 return
 
             # Attempt at most once per process, regardless of outcome.
             self.agent_bridge._catchup_flush_done = True
 
-            with agent.messages_lock:
-                messages = list(agent.messages)
-            if not messages:
+            # No state yet (fresh install / first run): only consider yesterday
+            # instead of scanning an arbitrary history window.
+            start = (last_flush + _dt.timedelta(days=1)) if last_flush else yesterday
+            missed = []
+            day = start
+            while day <= yesterday:
+                missed.append(day)
+                day += _dt.timedelta(days=1)
+            if not missed:
                 return
 
+            cap = self._catchup_days()
+            if len(missed) > cap:
+                dropped = missed[:-cap]
+                missed = missed[-cap:]
+                logger.warning(
+                    f"[DailyFlush] {len(dropped)} missed day(s) older than the "
+                    f"catchup_days={cap} window are skipped ({dropped[0]}..{dropped[-1]})"
+                )
+                # Advance past the skipped window so it is not re-evaluated forever.
+                last_flush = missed[0] - _dt.timedelta(days=1)
+
             def _worker():
-                try:
-                    logger.info(
-                        f"[DailyFlush] Missed flush detected (last={last_flush}); "
-                        f"running startup catch-up over {len(messages)} messages"
-                    )
-                    fm = agent.memory_manager.flush_manager
-                    if fm.create_daily_summary(messages):
-                        ft = fm._last_flush_thread
-                        if ft:
-                            ft.join(timeout=60)
-                    try:
-                        fm.deep_dream()
-                    except Exception as e:
-                        logger.warning(f"[DailyFlush] catch-up deep_dream failed: {e}")
-                    # Mark the missed day (yesterday) as handled; tonight's
-                    # scheduled flush still runs and records today.
-                    self._record_flush_date(today - _dt.timedelta(days=1))
-                    logger.info("[DailyFlush] Startup catch-up complete")
-                except Exception as e:
-                    logger.warning(f"[DailyFlush] Startup catch-up failed: {e}")
+                self._run_catchup(agent, missed, last_flush, state.get("failed_dates", []))
 
             _th.Thread(target=_worker, daemon=True, name="daily-flush-catchup").start()
         except Exception as e:
             logger.warning(f"[DailyFlush] catch-up check failed: {e}")
 
-    def _flush_all_agents(self):
-        """Flush memory for all active agent sessions, then run Deep Dream."""
+    def _run_catchup(self, agent, missed_dates, last_flush, failed_dates):
+        """Flush each missed date in chronological order, then dream once."""
+        from agent.memory.flush_job import FlushStatus
+
+        failed = list(failed_dates or [])
+        recorded = last_flush.isoformat() if last_flush else ""
+        succeeded = 0
+        try:
+            logger.info(
+                f"[DailyFlush] Missed flush detected (last={recorded or 'never'}); "
+                f"running startup catch-up for {[str(d) for d in missed_dates]}"
+            )
+            fm = agent.memory_manager.flush_manager
+
+            try:
+                from agent.memory import get_conversation_store
+                store = get_conversation_store()
+            except Exception as e:
+                logger.warning(f"[DailyFlush] Catch-up cannot reach conversation store: {e}")
+                return
+
+            for target in missed_dates:
+                date_str = target.isoformat()
+                try:
+                    messages = store.load_messages_by_date(target)
+                except Exception as e:
+                    logger.warning(f"[DailyFlush] Failed to load messages for {date_str}: {e}")
+                    failed.append(date_str)
+                    continue
+
+                if not messages:
+                    logger.info(f"[DailyFlush] No conversation on {date_str}, nothing to flush")
+                    recorded = date_str
+                    failed = [d for d in failed if d != date_str]
+                    continue
+
+                job = fm.flush_from_messages(
+                    messages=messages,
+                    reason="daily_summary",
+                    wait=True,
+                    target_date=date_str,
+                )
+                if job.status in (FlushStatus.SUCCESS, FlushStatus.SKIPPED_NO_CONTENT):
+                    if job.status == FlushStatus.SUCCESS:
+                        succeeded += 1
+                    recorded = date_str
+                    failed = [d for d in failed if d != date_str]
+                    logger.info(
+                        f"[DailyFlush] Catch-up {date_str}: {job.status.value} "
+                        f"({len(messages)} messages)"
+                    )
+                else:
+                    failed.append(date_str)
+                    logger.warning(
+                        f"[DailyFlush] Catch-up {date_str} failed ({job.status.value}: {job.error}); "
+                        f"date not recorded, will retry"
+                    )
+
+            if succeeded:
+                try:
+                    fm.deep_dream()
+                except Exception as e:
+                    logger.warning(f"[DailyFlush] catch-up deep_dream failed: {e}")
+
+            logger.info(
+                f"[DailyFlush] Startup catch-up complete "
+                f"(last_flush_date={recorded or 'unchanged'}, failed={sorted(set(failed))})"
+            )
+        except Exception as e:
+            logger.warning(f"[DailyFlush] Startup catch-up failed: {e}")
+        finally:
+            if recorded:
+                self._write_flush_state(recorded, failed)
+
+    def _flush_all_agents(self, target_date=None) -> bool:
+        """Flush memory for all active agent sessions, then run Deep Dream.
+
+        Returns True when the day's memory is safely persisted: at least one
+        session was written, or every session had nothing new to write. False
+        means a flush failed or timed out with no successful write, so the
+        caller must not record the date as done.
+        """
+        from agent.memory.flush_job import FlushStatus
+
         agents = []
         if self.agent_bridge.default_agent:
             agents.append(("default", self.agent_bridge.default_agent))
@@ -1098,12 +1226,13 @@ class AgentInitializer:
             agents.append((sid, agent))
 
         if not agents:
-            return
+            logger.info("[DailyFlush] No active agent sessions to flush")
+            return True
 
-        # Phase 1: flush daily summaries
-        flushed = 0
-        flush_threads = []
+        # Phase 1: dispatch daily summaries
+        jobs = []
         dream_candidate = None
+        dispatch_failed = False
         for label, agent in agents:
             try:
                 if not agent.memory_manager:
@@ -1112,23 +1241,30 @@ class AgentInitializer:
                     messages = list(agent.messages)
                 if not messages:
                     continue
-                result = agent.memory_manager.flush_manager.create_daily_summary(messages)
-                if result:
-                    flushed += 1
-                    t = agent.memory_manager.flush_manager._last_flush_thread
-                    if t:
-                        flush_threads.append(t)
+                job = agent.memory_manager.flush_manager.create_daily_summary(
+                    messages, target_date=target_date
+                )
+                jobs.append((label, job))
                 if dream_candidate is None:
                     dream_candidate = agent.memory_manager.flush_manager
             except Exception as e:
+                dispatch_failed = True
                 logger.warning(f"[DailyFlush] Failed for session {label}: {e}")
 
-        if flushed:
-            logger.info(f"[DailyFlush] Flushed {flushed}/{len(agents)} agent session(s)")
+        # Wait for every flush to reach a terminal state before dreaming, so
+        # Deep Dream sees the freshly written daily records.
+        successes = 0
+        failures = 0
+        for label, job in jobs:
+            status = job.wait(timeout=120)
+            if status == FlushStatus.SUCCESS:
+                successes += 1
+            elif status in (FlushStatus.FAILED, FlushStatus.TIMEOUT):
+                failures += 1
+                logger.warning(f"[DailyFlush] Session {label}: {status.value} ({job.error})")
 
-        # Wait for all flush threads to finish before dreaming
-        for t in flush_threads:
-            t.join(timeout=60)
+        if successes:
+            logger.info(f"[DailyFlush] Flushed {successes}/{len(agents)} agent session(s)")
 
         # Phase 2: Deep Dream — distill daily memories → MEMORY.md + dream diary
         if dream_candidate:
@@ -1138,3 +1274,7 @@ class AgentInitializer:
                     logger.info("[DeepDream] Memory distillation completed successfully")
             except Exception as e:
                 logger.warning(f"[DeepDream] Failed: {e}")
+
+        if successes:
+            return True
+        return not (failures or dispatch_failed)

@@ -54,6 +54,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_session
 
 CREATE INDEX IF NOT EXISTS idx_sessions_last_active
     ON sessions (last_active);
+
+-- Date-ranged scans (catch-up flush replays a missed day across sessions).
+CREATE INDEX IF NOT EXISTS idx_messages_created_at
+    ON messages (created_at);
 """
 
 # Migration: add channel_type column to existing databases that predate it.
@@ -76,6 +80,11 @@ ALTER TABLE messages ADD COLUMN extras TEXT NOT NULL DEFAULT '';
 """
 
 DEFAULT_MAX_AGE_DAYS: int = 30
+
+# Upper bound for a single-day replay (load_messages_by_date). A day with more
+# turns than this is summarized from its most recent messages rather than
+# blowing up the summarizer's prompt.
+MAX_DATE_MESSAGES: int = 500
 
 
 def _is_visible_user_message(content: Any) -> bool:
@@ -543,6 +552,88 @@ class ConversationStore:
                 if _assistant_content_is_empty(content):
                     continue
             result.append({"role": role, "content": content})
+        return result
+
+    def load_messages_by_date(
+        self,
+        target_date,
+        session_id: Optional[str] = None,
+        include_internal: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Load all messages recorded on a calendar day, ordered chronologically.
+
+        Used by the startup catch-up flush: the in-memory ``agent.messages``
+        list only holds the last few restored turns, so a missed day has to be
+        replayed from the store instead.
+
+        Args:
+            target_date: ``datetime.date`` of the day to load (local time).
+            session_id: Optional session filter; all sessions when omitted.
+            include_internal: Keep internal markers ([SCHEDULED] injections)
+                and tool_use / tool_result blocks. Off by default so the
+                summarizer only sees real conversation text.
+
+        Returns:
+            Chronologically ordered list of message dicts (role, content),
+            capped at ``MAX_DATE_MESSAGES``.
+        """
+        import datetime as _dt
+
+        start_ts = int(
+            _dt.datetime.combine(target_date, _dt.time.min).timestamp()
+        )
+        end_ts = int(
+            _dt.datetime.combine(
+                target_date + _dt.timedelta(days=1), _dt.time.min
+            ).timestamp()
+        )
+
+        sql = """
+            SELECT role, content
+            FROM messages
+            WHERE created_at >= ? AND created_at < ?
+        """
+        params: List[Any] = [start_ts, end_ts]
+        if session_id:
+            sql += " AND session_id = ?"
+            params.append(session_id)
+        sql += " ORDER BY created_at, seq"
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(sql, params).fetchall()
+            finally:
+                conn.close()
+
+        result: List[Dict[str, Any]] = []
+        for role, raw_content in rows:
+            try:
+                content = json.loads(raw_content)
+            except Exception:
+                content = raw_content
+
+            if not include_internal:
+                text = _extract_display_text(content)
+                if not text:
+                    # tool_use / tool_result / thinking-only turns
+                    continue
+                if role == "user" and _is_internal_user_marker(text):
+                    continue
+                if role == "assistant":
+                    content = _sanitize_assistant_content(content)
+                    if _assistant_content_is_empty(content):
+                        continue
+
+            result.append({"role": role, "content": content})
+
+        if len(result) > MAX_DATE_MESSAGES:
+            logger.warning(
+                f"[ConversationStore] {len(result)} messages on {target_date} exceed the "
+                f"{MAX_DATE_MESSAGES}-message cap; keeping the most recent ones"
+            )
+            result = result[-MAX_DATE_MESSAGES:]
         return result
 
     def append_messages(
