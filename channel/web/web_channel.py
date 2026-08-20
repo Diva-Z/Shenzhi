@@ -33,6 +33,32 @@ VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
 # seconds (postWithRetry), 10 minutes is generous but bounded.
 _CLIENT_MSG_TTL_SECONDS = 600
 
+
+def _client_msg_key(session_id: str, client_msg_id: str) -> str:
+    """Composite idempotency key so one session's client_msg_id can never
+    shadow another session's. An empty session_id keeps the legacy behaviour
+    (bare client_msg_id under an empty prefix)."""
+    return f"{session_id or ''}:{client_msg_id}"
+
+
+def _compute_payload_hash(message, attachments, is_voice, stream) -> str:
+    """Fingerprint of the request payload behind one client_msg_id.
+
+    A retry must carry an identical payload; a different one means the client
+    reused the id for a new message, which is a conflict rather than a dupe.
+    """
+    raw = (
+        str(message or "")
+        + "\x00"
+        + json.dumps(attachments or [], sort_keys=True, ensure_ascii=False)
+        + "\x00"
+        + str(bool(is_voice))
+        + "\x00"
+        + str(bool(stream))
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def _get_web_password() -> str:
     # Coerce to str so non-string values in config.json (e.g. numeric password) won't break comparisons
     pwd = conf().get("web_password", "")
@@ -245,37 +271,43 @@ class WebChannel(ChatChannel):
         self.request_to_session = {}  # request_id -> session_id
         self.sse_queues = {}  # request_id -> Queue (SSE streaming)
         self._http_server = None
-        # Idempotency: client_msg_id -> (timestamp, request_id, stream).
-        # Frontend retries reuse the same client_msg_id; a duplicate POST
-        # returns the original request_id instead of producing a second run.
+        # Idempotency: "<session_id>:<client_msg_id>" -> entry dict with
+        # request_id / payload_hash / created_at / use_sse. Frontend retries
+        # reuse the same client_msg_id; a duplicate POST returns the original
+        # request_id instead of producing a second run, and the same id with a
+        # different payload is rejected as a conflict.
         self.client_msg_cache = OrderedDict()
         self._client_msg_lock = threading.Lock()
 
-    def _remember_client_msg(self, client_msg_id: str, request_id: str, use_sse: bool):
+    def _remember_client_msg(self, cache_key: str, request_id: str, use_sse: bool, payload_hash: str = ""):
         now = time.time()
         with self._client_msg_lock:
-            self.client_msg_cache[client_msg_id] = (now, request_id, use_sse)
+            self.client_msg_cache[cache_key] = {
+                "request_id": request_id,
+                "payload_hash": payload_hash,
+                "created_at": now,
+                "use_sse": use_sse,
+            }
             # TTL pruning: drop entries older than the retry window.
             while self.client_msg_cache:
                 oldest_key = next(iter(self.client_msg_cache))
-                if now - self.client_msg_cache[oldest_key][0] <= _CLIENT_MSG_TTL_SECONDS:
+                if now - self.client_msg_cache[oldest_key]["created_at"] <= _CLIENT_MSG_TTL_SECONDS:
                     break
                 self.client_msg_cache.pop(oldest_key, None)
 
-    def _lookup_client_msg(self, client_msg_id: str):
-        """Return (request_id, stream) if this client_msg_id was seen within
-        the TTL window, else None."""
-        if not client_msg_id:
+    def _lookup_client_msg(self, cache_key: str):
+        """Return the cached entry dict if this key was seen within the TTL
+        window, else None."""
+        if not cache_key:
             return None
         with self._client_msg_lock:
-            entry = self.client_msg_cache.get(client_msg_id)
+            entry = self.client_msg_cache.get(cache_key)
             if not entry:
                 return None
-            ts, request_id, use_sse = entry
-            if time.time() - ts > _CLIENT_MSG_TTL_SECONDS:
-                self.client_msg_cache.pop(client_msg_id, None)
+            if time.time() - entry["created_at"] > _CLIENT_MSG_TTL_SECONDS:
+                self.client_msg_cache.pop(cache_key, None)
                 return None
-            return request_id, use_sse
+            return entry
 
     def _generate_msg_id(self):
         """生成唯一的消息ID"""
@@ -857,6 +889,11 @@ class WebChannel(ChatChannel):
             # TTS hook can honour the `voice_if_voice` policy (mirrors the
             # desire_rtype concept used by other channels).
             is_voice_input = bool(json_data.get('is_voice', False))
+            # Fingerprint the untouched request payload (before attachment /
+            # prefix rewriting) so a retry can be told apart from a client that
+            # reused the same client_msg_id for a different message.
+            cache_key = _client_msg_key(session_id, client_msg_id)
+            payload_hash = _compute_payload_hash(prompt, attachments, is_voice_input, use_sse)
 
             # Fast path for /cancel: bypass the session queue and SSE setup.
             # Web frontend (stream=true) only listens to SSE, so we return an
@@ -900,9 +937,26 @@ class WebChannel(ChatChannel):
             # Idempotency: a retry carrying an already-seen client_msg_id
             # returns the original request_id so the frontend keeps listening
             # to the first run. Never produce() twice for one user message.
-            dup = self._lookup_client_msg(client_msg_id)
+            dup = self._lookup_client_msg(cache_key) if client_msg_id else None
             if dup is not None:
-                dup_request_id, dup_stream = dup
+                if dup.get("payload_hash") != payload_hash:
+                    # Same id, different content: the client reused the key for
+                    # a new message. Reject instead of silently answering with
+                    # the previous run's request_id.
+                    logger.warning(
+                        f"[WebChannel] Idempotency conflict: client_msg_id={client_msg_id}, "
+                        f"session={session_id}"
+                    )
+                    raise web.HTTPError(
+                        "409 Conflict",
+                        {"Content-Type": "application/json; charset=utf-8"},
+                        json.dumps({
+                            "error": "IDEMPOTENCY_CONFLICT",
+                            "message": "same client_msg_id with different payload",
+                        }, ensure_ascii=False),
+                    )
+                dup_request_id = dup.get("request_id")
+                dup_stream = dup.get("use_sse")
                 logger.info(
                     f"[WebChannel] Duplicate client_msg_id={client_msg_id}, "
                     f"reusing request_id={dup_request_id}"
@@ -920,7 +974,8 @@ class WebChannel(ChatChannel):
 
             request_id = self._generate_request_id()
             self.request_to_session[request_id] = session_id
-            self._remember_client_msg(client_msg_id, request_id, use_sse)
+            if client_msg_id:
+                self._remember_client_msg(cache_key, request_id, use_sse, payload_hash)
 
             if session_id not in self.session_queues:
                 self.session_queues[session_id] = Queue()
@@ -946,7 +1001,7 @@ class WebChannel(ChatChannel):
                 if client_msg_id:
                     # Nothing was produced; free the idempotency slot.
                     with self._client_msg_lock:
-                        self.client_msg_cache.pop(client_msg_id, None)
+                        self.client_msg_cache.pop(cache_key, None)
                 return json.dumps({"status": "error", "message": "Message was filtered"})
 
             context["session_id"] = session_id
@@ -965,6 +1020,10 @@ class WebChannel(ChatChannel):
 
             return json.dumps({"status": "success", "request_id": request_id, "stream": use_sse})
 
+        except web.HTTPError:
+            # Deliberate HTTP status responses (e.g. 409 idempotency conflict)
+            # must reach the client with their status code intact.
+            raise
         except Exception as e:
             logger.error(f"Error processing message: {e}")
             return json.dumps({"status": "error", "message": str(e)})

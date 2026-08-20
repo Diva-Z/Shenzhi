@@ -58,6 +58,7 @@
 
   "message_bubble_enabled": true,
   "message_bubble_max_parts": 5,
+  "message_bubble_max_explicit": 10,
   "message_bubble_soft_chars": 80,
   "message_bubble_hard_chars": 160,
 
