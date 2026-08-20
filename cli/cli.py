@@ -35,6 +35,7 @@ from cli.commands.context import context
 from cli.commands.install import install_browser
 from cli.commands.knowledge import knowledge
 from cli.commands.master_cmd import master
+from cli.commands.health import health
 
 
 HELP_TEXT = """Usage: shenzhi COMMAND [ARGS]...
@@ -53,6 +54,7 @@ Commands:
   master   Start the master console (persona management web UI).
   skill    Manage ShenZhi skills.
   knowledge  Manage knowledge base.
+  health   Show system health and memory state.
   install-browser  Install browser tool (Playwright + Chromium).
 
 Tip: Memory index management lives in chat — send /memory status or
@@ -104,6 +106,7 @@ main.add_command(context)
 main.add_command(knowledge)
 main.add_command(install_browser)
 main.add_command(master)
+main.add_command(health)
 
 
 if __name__ == '__main__':
