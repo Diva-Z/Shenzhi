@@ -7,6 +7,7 @@ import mimetypes
 import os
 import random
 import shutil
+import sqlite3
 import threading
 import time
 import uuid
@@ -32,6 +33,9 @@ VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
 # Idempotency window for client_msg_id: frontend retries happen within a few
 # seconds (postWithRetry), 10 minutes is generous but bounded.
 _CLIENT_MSG_TTL_SECONDS = 600
+
+# Process start time, used by the /api/health endpoint to report uptime.
+_START_TIME = time.time()
 
 
 def _client_msg_key(session_id: str, client_msg_id: str) -> str:
@@ -1291,6 +1295,7 @@ class WebChannel(ChatChannel):
             '/api/messages/delete', 'MessageDeleteHandler',
             '/api/logs', 'LogsHandler',
             '/api/version', 'VersionHandler',
+            '/api/health', 'HealthHandler',
             '/assets/(.*)', 'AssetsHandler',
         )
         app = web.application(urls, globals(), autoreload=False)
@@ -4301,6 +4306,123 @@ class KnowledgeGraphHandler:
         except Exception as e:
             logger.error(f"[WebChannel] Knowledge graph error: {e}")
             return json.dumps({"nodes": [], "links": []})
+
+
+def _health_index_db_path():
+    """Path to the shared long-term index.db.
+
+    A single SQLite file backs the memory chunks/files, the conversation
+    sessions/messages, and the identity tables (see agent/memory/config.py
+    and conversation_store.py), so every health query below reads from it.
+    """
+    from agent.memory.config import get_default_memory_config
+    return get_default_memory_config().get_db_path()
+
+
+def _health_memory_dir():
+    from agent.memory.config import get_default_memory_config
+    return get_default_memory_config().get_memory_dir()
+
+
+def _health_sqlite_counts(db_path, queries):
+    """Run a set of COUNT queries against db_path in one read-only connection.
+
+    Returns None when the DB file is missing so callers can null out the whole
+    section; individual failing queries raise and are handled by the caller.
+    """
+    if not os.path.exists(db_path):
+        return None
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return {name: conn.execute(sql).fetchone()[0] for name, sql in queries.items()}
+    finally:
+        conn.close()
+
+
+def _health_memory_section():
+    """Pipeline dedup state + on-disk chunk/file storage stats."""
+    section = {"pipeline_state": None, "storage": None}
+
+    # Pipeline state: dedup hashes live in .memory_pipeline_state.json, while
+    # the last successful/failed daily flush dates live in the sibling
+    # .daily_flush_state.json written by the daily scheduler.
+    try:
+        from agent.memory.pipeline_state import PipelineState
+        memory_dir = _health_memory_dir()
+        state = PipelineState.get(memory_dir)
+        ps = {
+            "committed_hashes": len(state.trim_flushed_hashes),
+            "pending_transactions": len(getattr(state, "_pending_txns", {})),
+            "last_flush_date": None,
+            "failed_dates": [],
+        }
+        flush_state_file = memory_dir / ".daily_flush_state.json"
+        if flush_state_file.exists():
+            data = json.loads(flush_state_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                ps["last_flush_date"] = data.get("last_flush_date") or None
+                ps["failed_dates"] = data.get("failed_dates") or []
+        section["pipeline_state"] = ps
+    except Exception as e:
+        logger.debug(f"[Health] pipeline_state unavailable: {e}")
+
+    # Storage: chunk/file counts + DB size from the shared index.db.
+    try:
+        db_path = _health_index_db_path()
+        counts = _health_sqlite_counts(db_path, {
+            "chunk_count": "SELECT COUNT(*) FROM chunks",
+            "file_count": "SELECT COUNT(*) FROM files",
+        })
+        if counts is not None:
+            counts["db_size_bytes"] = os.path.getsize(db_path)
+            section["storage"] = counts
+    except Exception as e:
+        logger.debug(f"[Health] storage stats unavailable: {e}")
+
+    return section
+
+
+def _health_conversations_section():
+    try:
+        db_path = _health_index_db_path()
+        counts = _health_sqlite_counts(db_path, {
+            "session_count": "SELECT COUNT(*) FROM sessions",
+            "total_messages": "SELECT COUNT(*) FROM messages",
+        })
+        if counts is not None:
+            counts["db_size_bytes"] = os.path.getsize(db_path)
+        return counts
+    except Exception as e:
+        logger.debug(f"[Health] conversation stats unavailable: {e}")
+        return None
+
+
+def _health_identity_section():
+    try:
+        db_path = _health_index_db_path()
+        return _health_sqlite_counts(db_path, {
+            "identity_count": "SELECT COUNT(*) FROM identities",
+            "binding_count": "SELECT COUNT(*) FROM identity_bindings",
+        })
+    except Exception as e:
+        logger.debug(f"[Health] identity stats unavailable: {e}")
+        return None
+
+
+class HealthHandler:
+    """Auth-gated system/memory health snapshot at /api/health."""
+
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        report = {
+            "status": "ok",
+            "uptime_seconds": int(time.time() - _START_TIME),
+            "memory": _health_memory_section(),
+            "conversations": _health_conversations_section(),
+            "identity": _health_identity_section(),
+        }
+        return json.dumps(report, ensure_ascii=False)
 
 
 class VersionHandler:
